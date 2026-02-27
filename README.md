@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="banner.png" alt="VegaOptimizer Banner" width="100%">
+  <img src="banner.png" alt="VegaOptimizer Banner" width="960">
 </p>
 
 <p align="center">
