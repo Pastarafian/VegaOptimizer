@@ -337,19 +337,48 @@ pub fn get_hardware_info() -> HardwareInfo {
         })
         .collect();
 
-    // GPU detection via WMI command
-    let gpus = match std::process::Command::new("wmic")
-        .args(["path", "win32_videocontroller", "get", "name"])
+    // GPU detection via powershell
+    let gpus = match std::process::Command::new("powershell")
+        .args(&["-Command", "(Get-CimInstance Win32_VideoController).Name"])
         .output()
     {
-        Ok(o) => String::from_utf8_lossy(&o.stdout)
-            .lines()
-            .skip(1)
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty())
-            .collect(),
+        Ok(o) => {
+            let mut list = Vec::new();
+            for line in String::from_utf8_lossy(&o.stdout).lines() {
+                let t = line.trim();
+                if !t.is_empty() {
+                    list.push(t.to_string());
+                }
+            }
+            if list.is_empty() {
+                vec!["Unknown GPU".into()]
+            } else {
+                list
+            }
+        }
         Err(_) => vec!["Unknown GPU".into()],
     };
+
+    // RAM Type via powershell
+    let ram_type = match std::process::Command::new("powershell")
+        .args(&[
+            "-Command",
+            "(Get-CimInstance Win32_PhysicalMemory)[0].SMBIOSMemoryType",
+        ])
+        .output()
+    {
+        Ok(o) => match String::from_utf8_lossy(&o.stdout).trim() {
+            "20" => "DDR",
+            "21" => "DDR2",
+            "24" => "DDR3",
+            "26" => "DDR4",
+            "34" => "DDR5",
+            "35" => "LPDDR5",
+            _ => "Unknown",
+        },
+        Err(_) => "Unknown",
+    }
+    .to_string();
 
     // Network adapters
     let nets = Networks::new_with_refreshed_list();
@@ -362,7 +391,7 @@ pub fn get_hardware_info() -> HardwareInfo {
         cpu_cores_logical: sys.cpus().len(),
         cpu_frequency_mhz: cpu_freq,
         ram_total_gb: sys.total_memory() as f64 / 1_073_741_824.0,
-        ram_type: "DDR4/DDR5".into(), // Can't detect via sysinfo
+        ram_type,
         os_name: System::name().unwrap_or("Windows".into()),
         os_version: System::os_version().unwrap_or("Unknown".into()),
         os_build: System::long_os_version().unwrap_or("Unknown".into()),

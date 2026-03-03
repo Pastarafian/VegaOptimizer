@@ -327,7 +327,7 @@ pub fn start_service(name: &str) -> Result<String, String> {
 /// Stop a service
 pub fn stop_service(name: &str) -> Result<String, String> {
     // Safety check
-    for (pattern, cat, _, safe, _) in SERVICE_CLASSIFICATIONS {
+    for (pattern, _cat, _, safe, _) in SERVICE_CLASSIFICATIONS {
         if name.to_lowercase().contains(&pattern.to_lowercase()) && !safe {
             return Err(format!("{} is an essential system service", name));
         }

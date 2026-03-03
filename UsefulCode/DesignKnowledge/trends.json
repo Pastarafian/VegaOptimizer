@@ -1,0 +1,38 @@
+[
+  {
+    "name": "Bento Grid",
+    "description": "Modular, card-based layouts tightly packed",
+    "category": "layout",
+    "timeframe": "2024-2025"
+  },
+  {
+    "name": "Glassmorphism",
+    "description": "Frosted glass effects with background-blur",
+    "category": "style",
+    "timeframe": "Trending"
+  },
+  {
+    "name": "Aurora / Mesh Gradients",
+    "description": "Smooth, blurred mesh gradients combining 3-4 vivid colors",
+    "category": "background",
+    "timeframe": "Trending"
+  },
+  {
+    "name": "Neobrutalism",
+    "description": "High contrast, bold typography, hard shadows",
+    "category": "style",
+    "timeframe": "Fading Out"
+  },
+  {
+    "name": "Micro-interactions",
+    "description": "Subtle physics-based animations upon interaction",
+    "category": "animation",
+    "timeframe": "Evergreen"
+  },
+  {
+    "name": "Skeuomorph Returns",
+    "description": "Embossed edges and subtle 3D lighting making a comeback",
+    "category": "style",
+    "timeframe": "Rising"
+  }
+]

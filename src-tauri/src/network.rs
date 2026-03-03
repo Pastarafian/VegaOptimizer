@@ -35,15 +35,6 @@ pub struct NetworkOverview {
     pub connections: Vec<NetworkConnection>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SpeedTestResult {
-    pub download_mbps: f64,
-    pub upload_mbps: f64,
-    pub ping_ms: f64,
-    pub server: String,
-    pub timestamp: String,
-}
-
 /// Get all network connections with process mapping
 pub fn get_network_connections() -> NetworkOverview {
     let mut connections = Vec::new();

@@ -20,42 +20,6 @@ pub fn scan_large_files(min_size_mb: u64, max_results: usize) -> Vec<LargeFile> 
     let mut files: Vec<LargeFile> = Vec::new();
     let min_bytes = min_size_mb * 1_048_576;
 
-    // Scan common locations
-    let dirs_to_scan = [
-        std::env::var("USERPROFILE").unwrap_or_default(),
-        "C:\\".to_string(),
-    ];
-
-    for base_dir in &dirs_to_scan {
-        if base_dir.is_empty() {
-            continue;
-        }
-        scan_dir_recursive(base_dir, min_bytes, &mut files, 3, max_results);
-        if files.len() >= max_results {
-            break;
-        }
-    }
-
-    files.sort_by(|a, b| {
-        b.size_mb
-            .partial_cmp(&a.size_mb)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    files.truncate(max_results);
-    files
-}
-
-fn scan_dir_recursive(
-    dir: &str,
-    min_bytes: u64,
-    files: &mut Vec<LargeFile>,
-    depth: u32,
-    max: usize,
-) {
-    if depth == 0 || files.len() >= max {
-        return;
-    }
-
     let skip_dirs = [
         "Windows",
         "Program Files",
@@ -68,63 +32,74 @@ fn scan_dir_recursive(
         "AppData",
     ];
 
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            if files.len() >= max {
-                return;
-            }
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().to_string();
+    let mut stack = vec![
+        (std::env::var("USERPROFILE").unwrap_or_default(), 0),
+        ("C:\\".to_string(), 0),
+    ];
 
-            if let Ok(meta) = entry.metadata() {
-                if meta.is_dir() {
-                    if !skip_dirs.iter().any(|s| name.eq_ignore_ascii_case(s)) {
-                        scan_dir_recursive(
-                            &path.to_string_lossy(),
-                            min_bytes,
-                            files,
-                            depth - 1,
-                            max,
-                        );
+    while let Some((dir, depth)) = stack.pop() {
+        if dir.is_empty() || depth > 8 {
+            // Max depth 8
+            continue;
+        }
+
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let name = entry.file_name().to_string_lossy().to_string();
+
+                if let Ok(meta) = entry.metadata() {
+                    if meta.is_dir() {
+                        if !skip_dirs.iter().any(|s| name.eq_ignore_ascii_case(s)) {
+                            stack.push((path.to_string_lossy().to_string(), depth + 1));
+                        }
+                    } else if meta.is_file() && meta.len() >= min_bytes {
+                        let ext = path
+                            .extension()
+                            .map(|e| e.to_string_lossy().to_lowercase())
+                            .unwrap_or_default();
+                        let modified = meta
+                            .modified()
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| {
+                                let secs = d.as_secs();
+                                let days_ago = (std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_secs()
+                                    - secs)
+                                    / 86400;
+                                if days_ago == 0 {
+                                    "Today".into()
+                                } else if days_ago == 1 {
+                                    "Yesterday".into()
+                                } else {
+                                    format!("{} days ago", days_ago)
+                                }
+                            })
+                            .unwrap_or_else(|| "Unknown".into());
+
+                        files.push(LargeFile {
+                            path: path.to_string_lossy().to_string(),
+                            size_mb: meta.len() as f64 / 1_048_576.0,
+                            extension: ext.clone(),
+                            category: categorize_extension(&ext),
+                            modified,
+                        });
                     }
-                } else if meta.is_file() && meta.len() >= min_bytes {
-                    let ext = path
-                        .extension()
-                        .map(|e| e.to_string_lossy().to_lowercase())
-                        .unwrap_or_default();
-                    let modified = meta
-                        .modified()
-                        .ok()
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| {
-                            let secs = d.as_secs();
-                            let days_ago = (std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap()
-                                .as_secs()
-                                - secs)
-                                / 86400;
-                            if days_ago == 0 {
-                                "Today".into()
-                            } else if days_ago == 1 {
-                                "Yesterday".into()
-                            } else {
-                                format!("{} days ago", days_ago)
-                            }
-                        })
-                        .unwrap_or_else(|| "Unknown".into());
-
-                    files.push(LargeFile {
-                        path: path.to_string_lossy().to_string(),
-                        size_mb: meta.len() as f64 / 1_048_576.0,
-                        extension: ext.clone(),
-                        category: categorize_extension(&ext),
-                        modified,
-                    });
                 }
             }
         }
     }
+
+    files.sort_by(|a, b| {
+        b.size_mb
+            .partial_cmp(&a.size_mb)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    files.truncate(max_results);
+    files
 }
 
 fn categorize_extension(ext: &str) -> String {
@@ -238,16 +213,29 @@ pub fn clean_browser_cache(browser_name: &str) -> Result<String, String> {
         _ => return Err(format!("Unknown browser: {}", browser_name)),
     };
 
+    // Chrome and Edge now bury cache in Cache/Cache_Data
+    let mut actual_paths = Vec::new();
+    for p in &cache_paths {
+        actual_paths.push(p.clone());
+        actual_paths.push(format!("{}\\Cache_Data", p));
+        actual_paths.push(format!("{}\\js", p));
+    }
+
     let mut total_freed: u64 = 0;
     let mut files_deleted: u32 = 0;
 
-    for path in &cache_paths {
+    for path in &actual_paths {
         if let Ok(entries) = std::fs::read_dir(path) {
             for entry in entries.flatten() {
                 if let Ok(meta) = entry.metadata() {
-                    if meta.is_file() {
-                        let size = meta.len();
-                        if std::fs::remove_file(entry.path()).is_ok() {
+                    let size = meta.len();
+                    let entry_path = entry.path();
+                    if meta.is_dir() {
+                        if std::fs::remove_dir_all(&entry_path).is_ok() {
+                            total_freed += size; // Size of dir itself might be small, but it's something.
+                        }
+                    } else if meta.is_file() {
+                        if std::fs::remove_file(&entry_path).is_ok() {
                             total_freed += size;
                             files_deleted += 1;
                         }

@@ -1,0 +1,110 @@
+[
+  {
+    "id": "modern_saas_1",
+    "name": "Modern SaaS (Blue)",
+    "mood": "professional",
+    "tags": [
+      "corporate",
+      "clean",
+      "trust"
+    ],
+    "colors": {
+      "primary": "#2563eb",
+      "secondary": "#4f4f4f",
+      "accent": "#f59e0b",
+      "background": "#ffffff",
+      "surface": "#f3f4f6",
+      "text_primary": "#111827",
+      "text_secondary": "#4b5563",
+      "destructive": "#ef4444",
+      "success": "#10b981",
+      "dark_mode": {
+        "background": "#0f172a",
+        "surface": "#1e293b",
+        "text_primary": "#f8fafc",
+        "text_secondary": "#94a3b8"
+      }
+    }
+  },
+  {
+    "id": "playful_brand",
+    "name": "Playful Startup",
+    "mood": "playful",
+    "tags": [
+      "startup",
+      "warm",
+      "friendly"
+    ],
+    "colors": {
+      "primary": "#ec4899",
+      "secondary": "#8b5cf6",
+      "accent": "#fbbf24",
+      "background": "#fffdfa",
+      "surface": "#fdf2f8",
+      "text_primary": "#1f2937",
+      "text_secondary": "#6b7280",
+      "destructive": "#ef4444",
+      "success": "#10b981",
+      "dark_mode": {
+        "background": "#171717",
+        "surface": "#262626",
+        "text_primary": "#f9fafb",
+        "text_secondary": "#a1a1aa"
+      }
+    }
+  },
+  {
+    "id": "luxury_dark",
+    "name": "Luxury Dark Mode",
+    "mood": "luxury",
+    "tags": [
+      "premium",
+      "dark",
+      "gold"
+    ],
+    "colors": {
+      "primary": "#d4af37",
+      "secondary": "#e5e7eb",
+      "accent": "#fcd34d",
+      "background": "#0a0a0a",
+      "surface": "#171717",
+      "text_primary": "#fafafa",
+      "text_secondary": "#a3a3a3",
+      "destructive": "#ef4444",
+      "success": "#10b981",
+      "light_mode_counterpart": {
+        "background": "#ffffff",
+        "surface": "#f3f4f6",
+        "text_primary": "#171717",
+        "text_secondary": "#525252"
+      }
+    }
+  },
+  {
+    "id": "eco_green",
+    "name": "Eco Nature",
+    "mood": "organic",
+    "tags": [
+      "nature",
+      "medical",
+      "calm"
+    ],
+    "colors": {
+      "primary": "#059669",
+      "secondary": "#047857",
+      "accent": "#84cc16",
+      "background": "#f8fafc",
+      "surface": "#ecfdf5",
+      "text_primary": "#064e3b",
+      "text_secondary": "#065f46",
+      "destructive": "#dc2626",
+      "success": "#10b981",
+      "dark_mode": {
+        "background": "#022c22",
+        "surface": "#064e3b",
+        "text_primary": "#ecfdf5",
+        "text_secondary": "#a7f3d0"
+      }
+    }
+  }
+]

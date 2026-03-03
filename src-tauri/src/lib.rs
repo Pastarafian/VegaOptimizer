@@ -1,6 +1,7 @@
 mod battery;
 mod benchmark;
 mod debloater;
+mod disk_cleanup;
 mod disk_health;
 mod duplicates;
 mod monitor;
@@ -81,7 +82,11 @@ async fn cmd_list_startup() -> Vec<startup::StartupEntry> {
 }
 
 #[tauri::command]
-async fn cmd_toggle_startup(name: String, registry_path: String, enable: bool) -> Result<String, String> {
+async fn cmd_toggle_startup(
+    name: String,
+    registry_path: String,
+    enable: bool,
+) -> Result<String, String> {
     bg(move || toggle_startup(&name, &registry_path, enable)).await
 }
 
@@ -111,10 +116,31 @@ async fn cmd_delete_file(path: String) -> Result<String, String> {
         }
         let size = p.metadata().map(|m| m.len()).unwrap_or(0);
         match std::fs::remove_file(p) {
-            Ok(_) => Ok(format!("Deleted {} ({:.1} MB)", path, size as f64 / 1_048_576.0)),
+            Ok(_) => Ok(format!(
+                "Deleted {} ({:.1} MB)",
+                path,
+                size as f64 / 1_048_576.0
+            )),
             Err(e) => Err(format!("Failed to delete: {}", e)),
         }
-    }).await
+    })
+    .await
+}
+
+#[tauri::command]
+async fn cmd_reveal_file(path: String) -> Result<(), String> {
+    bg(move || {
+        let p = std::path::Path::new(&path);
+        if !p.exists() {
+            return Err("File not found".to_string());
+        }
+        std::process::Command::new("explorer")
+            .args(&["/select,", &path])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -158,7 +184,8 @@ async fn cmd_kill_process(pid: u32) -> Result<String, String> {
             Ok(o) => Err(String::from_utf8_lossy(&o.stderr).to_string()),
             Err(e) => Err(e.to_string()),
         }
-    }).await
+    })
+    .await
 }
 
 #[derive(serde::Serialize)]
@@ -228,7 +255,8 @@ async fn cmd_get_process_suggestions() -> Vec<ProcessSuggestion> {
         // Count process instances for duplicate detection
         let mut name_counts: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
-        let mut name_memory: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+        let mut name_memory: std::collections::HashMap<String, f64> =
+            std::collections::HashMap::new();
         for (_pid, proc_) in sys.processes() {
             let name = proc_.name().to_string_lossy().to_lowercase();
             *name_counts.entry(name.clone()).or_insert(0) += 1;
@@ -256,7 +284,10 @@ async fn cmd_get_process_suggestions() -> Vec<ProcessSuggestion> {
                     memory_mb: mem,
                     cpu_percent: cpu,
                     estimated_savings_mb: mem * 0.3,
-                    reason: format!("{:.0} MB used with {:.1}% CPU — likely idle bloat", mem, cpu),
+                    reason: format!(
+                        "{:.0} MB used with {:.1}% CPU — likely idle bloat",
+                        mem, cpu
+                    ),
                     severity: "high".into(),
                     category: "bloated".into(),
                     safe_to_optimize: true,
@@ -270,7 +301,10 @@ async fn cmd_get_process_suggestions() -> Vec<ProcessSuggestion> {
                     memory_mb: mem,
                     cpu_percent: cpu,
                     estimated_savings_mb: mem * 0.2,
-                    reason: format!("{:.0} MB used, completely idle — memory can be trimmed", mem),
+                    reason: format!(
+                        "{:.0} MB used, completely idle — memory can be trimmed",
+                        mem
+                    ),
                     severity: "medium".into(),
                     category: "idle_hog".into(),
                     safe_to_optimize: true,
@@ -281,7 +315,9 @@ async fn cmd_get_process_suggestions() -> Vec<ProcessSuggestion> {
             let count = name_counts.get(&name_lower).copied().unwrap_or(0);
             let total_mem = name_memory.get(&name_lower).copied().unwrap_or(0.0);
             if count > 3 && total_mem > 100.0 && mem > 20.0 {
-                let already = suggestions.iter().any(|s| s.name.to_lowercase() == name_lower && s.category == "duplicate");
+                let already = suggestions
+                    .iter()
+                    .any(|s| s.name.to_lowercase() == name_lower && s.category == "duplicate");
                 if !already {
                     suggestions.push(ProcessSuggestion {
                         pid: pid.as_u32(),
@@ -305,7 +341,10 @@ async fn cmd_get_process_suggestions() -> Vec<ProcessSuggestion> {
                     memory_mb: mem,
                     cpu_percent: cpu,
                     estimated_savings_mb: mem * 0.15,
-                    reason: format!("Background process using {:.0} MB with no CPU activity", mem),
+                    reason: format!(
+                        "Background process using {:.0} MB with no CPU activity",
+                        mem
+                    ),
                     severity: "low".into(),
                     category: "background".into(),
                     safe_to_optimize: true,
@@ -315,14 +354,22 @@ async fn cmd_get_process_suggestions() -> Vec<ProcessSuggestion> {
 
         // Sort: high severity first, then by memory
         suggestions.sort_by(|a, b| {
-            let sev = |s: &str| match s { "high" => 0, "medium" => 1, _ => 2 };
-            sev(&a.severity).cmp(&sev(&b.severity))
-                .then(b.memory_mb.partial_cmp(&a.memory_mb).unwrap_or(std::cmp::Ordering::Equal))
+            let sev = |s: &str| match s {
+                "high" => 0,
+                "medium" => 1,
+                _ => 2,
+            };
+            sev(&a.severity).cmp(&sev(&b.severity)).then(
+                b.memory_mb
+                    .partial_cmp(&a.memory_mb)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
         });
 
         suggestions.truncate(50);
         suggestions
-    }).await
+    })
+    .await
 }
 
 #[tauri::command]
@@ -357,21 +404,26 @@ async fn cmd_optimize_processes(pids: Vec<u32>) -> ProcessOptReport {
 
             #[cfg(windows)]
             {
+                use winapi::um::errhandlingapi::GetLastError;
+                use winapi::um::handleapi::CloseHandle;
                 use winapi::um::processthreadsapi::OpenProcess;
                 use winapi::um::psapi::EmptyWorkingSet;
-                use winapi::um::handleapi::CloseHandle;
-                use winapi::um::errhandlingapi::GetLastError;
-                use winapi::um::winnt::{PROCESS_SET_QUOTA, PROCESS_QUERY_INFORMATION};
+                use winapi::um::winnt::{PROCESS_QUERY_INFORMATION, PROCESS_SET_QUOTA};
 
                 unsafe {
-                    let handle = OpenProcess(
-                        PROCESS_SET_QUOTA | PROCESS_QUERY_INFORMATION, 0, pid
-                    );
+                    let handle = OpenProcess(PROCESS_SET_QUOTA | PROCESS_QUERY_INFORMATION, 0, pid);
                     if handle.is_null() {
                         let err = GetLastError();
                         success = false;
-                        message = format!("Cannot open process (error {}{})", err,
-                            if err == 5 { " — run as Administrator" } else { "" });
+                        message = format!(
+                            "Cannot open process (error {}{})",
+                            err,
+                            if err == 5 {
+                                " — run as Administrator"
+                            } else {
+                                ""
+                            }
+                        );
                     } else {
                         let r = EmptyWorkingSet(handle);
                         if r != 0 {
@@ -428,35 +480,39 @@ async fn cmd_optimize_processes(pids: Vec<u32>) -> ProcessOptReport {
             processes_trimmed: results.iter().filter(|r| r.success).count(),
             results,
         }
-    }).await
+    })
+    .await
 }
 
 /// Enable SeDebugPrivilege so we can call EmptyWorkingSet on any process
 #[cfg(windows)]
 fn enable_debug_privilege() {
+    use std::ptr::null_mut;
+    use winapi::um::handleapi::CloseHandle;
     use winapi::um::processthreadsapi::{GetCurrentProcess, OpenProcessToken};
     use winapi::um::securitybaseapi::AdjustTokenPrivileges;
     use winapi::um::winbase::LookupPrivilegeValueA;
     use winapi::um::winnt::{
-        TOKEN_ADJUST_PRIVILEGES, TOKEN_QUERY,
-        SE_PRIVILEGE_ENABLED, TOKEN_PRIVILEGES, LUID,
+        LUID, SE_PRIVILEGE_ENABLED, TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_QUERY,
     };
-    use winapi::um::handleapi::CloseHandle;
-    use std::ptr::null_mut;
 
     unsafe {
         let mut token = null_mut();
-        if OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &mut token) == 0 {
+        if OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+            &mut token,
+        ) == 0
+        {
             return;
         }
 
-        let mut luid = LUID { LowPart: 0, HighPart: 0 };
+        let mut luid = LUID {
+            LowPart: 0,
+            HighPart: 0,
+        };
         let priv_name = b"SeDebugPrivilege\0";
-        if LookupPrivilegeValueA(
-            null_mut(),
-            priv_name.as_ptr() as *const i8,
-            &mut luid,
-        ) == 0 {
+        if LookupPrivilegeValueA(null_mut(), priv_name.as_ptr() as *const i8, &mut luid) == 0 {
             CloseHandle(token);
             return;
         }
@@ -466,14 +522,7 @@ fn enable_debug_privilege() {
         tp.Privileges[0].Luid = luid;
         tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
 
-        AdjustTokenPrivileges(
-            token,
-            0,
-            &mut tp,
-            0,
-            null_mut(),
-            null_mut(),
-        );
+        AdjustTokenPrivileges(token, 0, &mut tp, 0, null_mut(), null_mut());
 
         CloseHandle(token);
     }
@@ -596,6 +645,247 @@ async fn cmd_get_battery_health() -> battery::BatteryHealth {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// Tauri Commands — Driver Management
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[tauri::command]
+async fn cmd_scan_driver_updates() -> Result<String, String> {
+    bg(|| {
+        match std::process::Command::new("pnputil")
+            .args(["/scan-devices"])
+            .output()
+        {
+            Ok(o) => Ok(String::from_utf8_lossy(&o.stdout).trim().to_string()),
+            Err(e) => Err(e.to_string()),
+        }
+    })
+    .await
+}
+
+#[tauri::command]
+async fn cmd_open_device_manager() -> Result<String, String> {
+    bg(|| {
+        match std::process::Command::new("cmd")
+            .args(["/C", "start devmgmt.msc"])
+            .output()
+        {
+            Ok(_) => Ok("Device Manager opened".into()),
+            Err(e) => Err(e.to_string()),
+        }
+    })
+    .await
+}
+
+#[tauri::command]
+async fn cmd_open_windows_update() -> Result<String, String> {
+    bg(|| {
+        match std::process::Command::new("cmd")
+            .args(["/C", "start ms-settings:windowsupdate"])
+            .output()
+        {
+            Ok(_) => Ok("Windows Update opened".into()),
+            Err(e) => Err(e.to_string()),
+        }
+    })
+    .await
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Tauri Commands — Disk Cleanup
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[tauri::command]
+async fn cmd_scan_junk() -> Vec<disk_cleanup::JunkCategory> {
+    bg(|| disk_cleanup::scan_junk_categories()).await
+}
+
+#[tauri::command]
+async fn cmd_clean_junk_category(id: String) -> Result<disk_cleanup::CleanResult, String> {
+    bg(move || disk_cleanup::clean_junk_category(&id)).await
+}
+
+#[tauri::command]
+async fn cmd_scan_app_caches() -> Vec<disk_cleanup::AppCache> {
+    bg(|| disk_cleanup::scan_app_caches()).await
+}
+
+#[tauri::command]
+async fn cmd_clean_app_cache(app_name: String) -> Result<disk_cleanup::CleanResult, String> {
+    bg(move || disk_cleanup::clean_app_cache(&app_name)).await
+}
+
+#[tauri::command]
+async fn cmd_scan_stale_files(days: u64) -> Vec<disk_cleanup::StaleFile> {
+    bg(move || disk_cleanup::scan_stale_files(days, 100)).await
+}
+
+#[tauri::command]
+async fn cmd_list_installed_programs() -> Vec<disk_cleanup::InstalledProgram> {
+    bg(|| disk_cleanup::list_installed_programs()).await
+}
+
+#[tauri::command]
+async fn cmd_uninstall_program(command: String) -> Result<String, String> {
+    bg(move || disk_cleanup::uninstall_program(&command)).await
+}
+
+#[tauri::command]
+async fn cmd_list_restore_points() -> Vec<disk_cleanup::RestorePoint> {
+    bg(|| disk_cleanup::list_restore_points()).await
+}
+
+#[tauri::command]
+async fn cmd_delete_restore_point(seq: u32) -> Result<String, String> {
+    bg(move || disk_cleanup::delete_restore_point(seq)).await
+}
+
+#[tauri::command]
+async fn cmd_shred_file(path: String, passes: u32) -> Result<disk_cleanup::ShredResult, String> {
+    bg(move || disk_cleanup::shred_file(&path, passes)).await
+}
+
+#[tauri::command]
+async fn cmd_wipe_free_space(
+    drive: String,
+    passes: u32,
+) -> Result<disk_cleanup::WipeProgress, String> {
+    bg(move || disk_cleanup::wipe_free_space(&drive, passes)).await
+}
+
+#[tauri::command]
+async fn cmd_get_ai_suggestions() -> Vec<disk_cleanup::AiSuggestion> {
+    bg(|| disk_cleanup::get_ai_suggestions()).await
+}
+
+#[tauri::command]
+async fn cmd_get_folder_sizes(root: String) -> Vec<disk_cleanup::FolderSize> {
+    bg(move || disk_cleanup::get_folder_sizes(&root, 3)).await
+}
+
+#[tauri::command]
+async fn cmd_deep_clean() -> disk_cleanup::DeepCleanResult {
+    bg(|| disk_cleanup::deep_clean()).await
+}
+
+#[derive(serde::Serialize)]
+pub struct ScheduledTask {
+    pub name: String,
+    pub status: String,
+}
+
+#[tauri::command]
+async fn cmd_list_scheduled_tasks() -> Result<Vec<ScheduledTask>, String> {
+    bg(|| {
+        let out = std::process::Command::new("schtasks")
+            .args(&["/query", "/fo", "csv", "/nh"])
+            .output()
+            .map_err(|e| e.to_string())?;
+        let s = String::from_utf8_lossy(&out.stdout);
+        let mut tasks = Vec::new();
+        for line in s.lines() {
+            let mut parts = line.split("\",\"");
+            if let (Some(n), Some(_), Some(stat)) = (parts.next(), parts.next(), parts.next()) {
+                tasks.push(ScheduledTask {
+                    name: n.trim_start_matches('"').to_string(),
+                    status: stat
+                        .trim_end_matches('"')
+                        .trim_end_matches('\r')
+                        .to_string(),
+                });
+            }
+        }
+        Ok(tasks)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn cmd_toggle_scheduled_task(name: String, enable: bool) -> Result<String, String> {
+    bg(move || {
+        let action = if enable { "/Enable" } else { "/Disable" };
+        let out = std::process::Command::new("schtasks")
+            .args(&["/Change", "/TN", &name, action])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if out.status.success() {
+            Ok("Success".into())
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).into())
+        }
+    })
+    .await
+}
+
+#[tauri::command]
+async fn cmd_enable_game_booster() -> Result<String, String> {
+    bg(|| {
+        // High performance scheme
+        let _ = std::process::Command::new("powercfg")
+            .args(&["/s", "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"])
+            .output();
+        
+        // Stop non-essential heavy background services gracefully
+        // We use powershell to allow it to silently fail if the service doesn't exist
+        let _ = std::process::Command::new("powershell")
+            .args(&[
+                "-WindowStyle", "Hidden", 
+                "-Command", 
+                "Stop-Service -Name SysMain -Force -ErrorAction SilentlyContinue; Stop-Service -Name Spooler -Force -ErrorAction SilentlyContinue"
+            ])
+            .output();
+            
+        Ok("Game Booster Enabled".into())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn cmd_restore_normal_mode() -> Result<String, String> {
+    bg(|| {
+        // Balanced scheme
+        let _ = std::process::Command::new("powercfg")
+            .args(&["/s", "381b4222-f694-41f0-9685-ff5bb260df2e"])
+            .output();
+            
+        // Restart standard services
+        let _ = std::process::Command::new("powershell")
+            .args(&[
+                "-WindowStyle", "Hidden", 
+                "-Command", 
+                "Start-Service -Name SysMain -ErrorAction SilentlyContinue; Start-Service -Name Spooler -ErrorAction SilentlyContinue"
+            ])
+            .output();
+            
+        Ok("Restored Normal Mode".into())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn cmd_toggle_telemetry(setting: String, disable: bool) -> Result<String, String> {
+    bg(move || {
+        let val = if disable { "0" } else { "1" };
+        match setting.as_str() {
+            "telemetry" => {
+                let _ = std::process::Command::new("cmd").args(&["/C", "reg add HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection /v AllowTelemetry /t REG_DWORD /d", val, "/f"]).output();
+            },
+            "cortana" => {
+                let _ = std::process::Command::new("cmd").args(&["/C", "reg add HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\Windows Search /v AllowCortana /t REG_DWORD /d", val, "/f"]).output();
+            },
+            "activity_history" => {
+                let _ = std::process::Command::new("cmd").args(&["/C", "reg add HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\System /v EnableActivityFeed /t REG_DWORD /d", val, "/f"]).output();
+                let _ = std::process::Command::new("cmd").args(&["/C", "reg add HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\System /v PublishUserActivities /t REG_DWORD /d", val, "/f"]).output();
+            },
+            "ad_id" => {
+                let _ = std::process::Command::new("cmd").args(&["/C", "reg add HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\AdvertisingInfo /v Enabled /t REG_DWORD /d", val, "/f"]).output();
+            },
+            _ => return Err("Unknown setting".into()),
+        }
+        Ok("Success".into())
+    }).await
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // App Entry
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -603,6 +893,7 @@ async fn cmd_get_battery_health() -> battery::BatteryHealth {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             // Original
             cmd_get_system_info,
@@ -651,8 +942,34 @@ pub fn run() {
             cmd_fix_registry_issue,
             // Battery
             cmd_get_battery_health,
+            // Driver Management
+            cmd_scan_driver_updates,
+            cmd_open_device_manager,
+            cmd_open_windows_update,
+            // Disk Cleanup
+            cmd_scan_junk,
+            cmd_clean_junk_category,
+            cmd_scan_app_caches,
+            cmd_clean_app_cache,
+            cmd_scan_stale_files,
+            cmd_list_installed_programs,
+            cmd_uninstall_program,
+            cmd_list_restore_points,
+            cmd_delete_restore_point,
+            cmd_shred_file,
+            cmd_wipe_free_space,
+            cmd_get_ai_suggestions,
+            cmd_get_folder_sizes,
+            cmd_deep_clean,
+            // New Features
+            cmd_list_scheduled_tasks,
+            cmd_toggle_scheduled_task,
+            cmd_enable_game_booster,
+            cmd_restore_normal_mode,
+            cmd_toggle_telemetry,
             // File delete
             cmd_delete_file,
+            cmd_reveal_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
