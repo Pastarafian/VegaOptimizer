@@ -18,11 +18,14 @@ interface HealthDetail { category: string; score: number; label: string; suggest
 interface HardwareInfo { cpu_name: string; cpu_arch: string; cpu_cores_physical: number; cpu_cores_logical: number; cpu_frequency_mhz: number; ram_total_gb: number; ram_type: string; os_name: string; os_version: string; os_build: string; hostname: string; disks: DiskInfo[]; gpus: string[]; network_adapters: string[]; }
 interface DiskInfo { name: string; mount_point: string; fs_type: string; total_gb: number; used_gb: number; free_gb: number; usage_percent: number; is_removable: boolean; }
 interface StartupEntry { name: string; command: string; location: string; registry_path: string; enabled: boolean; publisher: string; impact: string; }
-interface LargeFile { path: string; size_mb: number; extension: string; category: string; modified: string; }
+interface LargeFile { path: string; size_mb: number; extension: string; category: string; modified: string; ai_tooltip?: string; }
 interface BrowserInfo { name: string; cache_size_mb: number; cache_path: string; installed: boolean; }
 interface PrivacyItem { id: string; name: string; description: string; category: string; data_size_mb: number; }
 interface DriverInfo { name: string; provider: string; version: string; date: string; device_class: string; signed: boolean; status: string; }
 interface ScheduledTask { name: string; status: string; }
+interface DnsProvider { id: string; name: string; primary: string; secondary: string; description: string; icon: string; }
+interface DnsStatus { adapter_name: string; current_primary: string; current_secondary: string; is_dhcp: boolean; active_provider: string; }
+interface ThemeStatus { apps_dark: boolean; system_dark: boolean; taskbar_color: boolean; }
 
 type Page = "dashboard" | "optimizer" | "processes" | "startup" | "disk" | "privacy" | "drivers" | "hardware" | "network" | "debloater" | "benchmark" | "services" | "registry" | "battery" | "duplicates" | "disk_health" | "disk_cleanup" | "settings";
 
@@ -78,8 +81,66 @@ function formatUptime(secs: number): string {
 // ═══════════════════════════════════════════════════════════════════
 // App
 // ═══════════════════════════════════════════════════════════════════
+// Ordered list of sidebar pages for arrow key navigation
+const SIDEBAR_PAGES: Page[] = ["dashboard","network","optimizer","processes","startup","services","disk","disk_cleanup","privacy","debloater","registry","duplicates","benchmark","disk_health","drivers","hardware","battery","settings"];
+
 export default function App() {
   const [page, setPage] = useState<Page>("dashboard");
+  const [focusZone, setFocusZone] = useState<"sidebar" | "main">("sidebar");
+  const sidebarRef = useRef<HTMLElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
+
+  // Global keyboard handler for zone switching and navigation
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't intercept if user is typing in an input, select, or textarea
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
+      if (e.key === "Tab") {
+        e.preventDefault();
+        const next = focusZone === "sidebar" ? "main" : "sidebar";
+        setFocusZone(next);
+        if (next === "sidebar") sidebarRef.current?.focus();
+        else mainRef.current?.focus();
+        return;
+      }
+
+      if (e.key === "Escape") {
+        setFocusZone("sidebar");
+        sidebarRef.current?.focus();
+        return;
+      }
+
+      // Arrow keys in sidebar zone: navigate between pages
+      if (focusZone === "sidebar") {
+        const idx = SIDEBAR_PAGES.indexOf(page);
+        if (e.key === "ArrowDown" || e.key === "j") {
+          e.preventDefault();
+          const next = SIDEBAR_PAGES[Math.min(idx + 1, SIDEBAR_PAGES.length - 1)];
+          setPage(next);
+        } else if (e.key === "ArrowUp" || e.key === "k") {
+          e.preventDefault();
+          const prev = SIDEBAR_PAGES[Math.max(idx - 1, 0)];
+          setPage(prev);
+        } else if (e.key === "Enter" || e.key === "ArrowRight" || e.key === "l") {
+          e.preventDefault();
+          setFocusZone("main");
+          mainRef.current?.focus();
+        }
+      }
+
+      // Arrow Left / h in main zone: return to sidebar
+      if (focusZone === "main" && (e.key === "ArrowLeft" || e.key === "h") && !(e.target as HTMLElement)?.closest(".tab-bar, .data-table, input, select")) {
+        e.preventDefault();
+        setFocusZone("sidebar");
+        sidebarRef.current?.focus();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [focusZone, page]);
 
   // Dashboard state
   const [health, setHealth] = useState<HealthScore | null>(null);
@@ -230,7 +291,7 @@ export default function App() {
   return (
     <div className="app-layout">
       {/* ── Sidebar ── */}
-      <aside className="sidebar">
+      <aside className={`sidebar ${focusZone === "sidebar" ? "focus-zone-active" : ""}`} ref={sidebarRef} tabIndex={-1}>
         <div className="sidebar-brand">
           <h1>◈ VegaOptimizer</h1>
           <div className="version">v3.0.0 — System Toolkit</div>
@@ -273,7 +334,7 @@ export default function App() {
       </aside>
 
       {/* ── Main ── */}
-      <main className="main-content">
+      <main className={`main-content ${focusZone === "main" ? "focus-zone-active" : ""}`} ref={mainRef} tabIndex={-1}>
         {page === "dashboard" && <DashboardPage health={health} metrics={metrics} sysInfo={sysInfo} hardware={hardware} />}
         {page === "optimizer" && (
           <OptimizerPage
@@ -313,7 +374,14 @@ export default function App() {
 // ═══════════════════════════════════════════════════════════════════
 function NavItem({ icon, label, id, active, onClick, badge }: { icon: string; label: string; id: Page; active: Page; onClick: (p: Page) => void; badge?: string }) {
   return (
-    <div className={`nav-item ${active === id ? "active" : ""}`} onClick={() => onClick(id)}>
+    <div
+      className={`nav-item ${active === id ? "active" : ""}`}
+      onClick={() => onClick(id)}
+      onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(id); } }}
+      tabIndex={active === id ? 0 : -1}
+      role="button"
+      aria-current={active === id ? "page" : undefined}
+    >
       <span className="icon">{icon}</span>
       <span>{label}</span>
       {badge && <span className="badge">{badge}</span>}
@@ -434,7 +502,13 @@ function DashboardPage({ health, metrics, sysInfo, hardware }: { health: HealthS
 // ═══════════════════════════════════════════════════════════════════
 // Optimizer
 // ═══════════════════════════════════════════════════════════════════
-function OptimizerPage({ catalog, categories, selected, expandedCats, setExpandedCats, toggleItem, applyProfile, optimizing, runOptimize, report, setReport }: any) {
+function OptimizerPage({ catalog, categories, selected, expandedCats, setExpandedCats, toggleItem, applyProfile, optimizing, runOptimize, report, setReport }: {
+  catalog: OptimizationItem[]; categories: string[]; selected: Set<string>;
+  expandedCats: Set<string>; setExpandedCats: React.Dispatch<React.SetStateAction<Set<string>>>;
+  toggleItem: (id: string) => void; applyProfile: (ids: string[]) => void;
+  optimizing: boolean; runOptimize: () => void;
+  report: OptimizationReport | null; setReport: (r: OptimizationReport | null) => void;
+}) {
   return (
     <div>
       <div className="page-header"><div><h2>System Optimizer</h2><div className="subtitle">Select optimizations and clean your system</div></div></div>
@@ -894,14 +968,130 @@ function SettingsPage() {
     return val === "1" ? true : val === "0" ? false : defaultVal;
   };
 
+  // Theme toggle
+  const [theme, setTheme] = useState<ThemeStatus | null>(null);
+  const [themeLoading, setThemeLoading] = useState(false);
+  useEffect(() => { invoke<ThemeStatus>("cmd_get_theme_status").then(setTheme).catch(console.error); }, []);
+
+  const toggleTheme = () => {
+    if (!theme) return;
+    setThemeLoading(true);
+    const newDark = !theme.apps_dark;
+    invoke<string>("cmd_set_dark_mode", { enabled: newDark })
+      .then(msg => { alert(msg); setTheme({ ...theme, apps_dark: newDark, system_dark: newDark }); })
+      .catch(e => alert(String(e)))
+      .finally(() => setThemeLoading(false));
+  };
+
+  // Restore points
+  const [restoreEnabled, setRestoreEnabled] = useState<boolean | null>(null);
+  const [creating, setCreating] = useState(false);
+  useEffect(() => { invoke<boolean>("cmd_is_restore_enabled").then(setRestoreEnabled).catch(() => setRestoreEnabled(false)); }, []);
+
+  const createRestore = () => {
+    setCreating(true);
+    invoke<string>("cmd_create_restore_point", { description: "VegaOptimizer Pre-Optimization Checkpoint" })
+      .then(msg => alert(msg))
+      .catch(e => alert(String(e)))
+      .finally(() => setCreating(false));
+  };
+
+  // Profile export/import
+  const exportProfile = () => {
+    const saved = localStorage.getItem("vega_optimizer_selected");
+    const telemetry: Record<string, string> = {};
+    ["telemetry", "cortana", "activity_history", "ad_id"].forEach(k => {
+      const v = localStorage.getItem(`vega_telemetry_${k}`);
+      if (v !== null) telemetry[k] = v;
+    });
+    const profile = { version: "3.0.0", timestamp: new Date().toISOString(), selections: saved ? JSON.parse(saved) : [], telemetry };
+    const blob = new Blob([JSON.stringify(profile, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `vega_optimizer_profile_${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const importProfile = () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json";
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const profile = JSON.parse(reader.result as string);
+          if (profile.selections && Array.isArray(profile.selections)) {
+            localStorage.setItem("vega_optimizer_selected", JSON.stringify(profile.selections));
+          }
+          if (profile.telemetry && typeof profile.telemetry === "object") {
+            Object.entries(profile.telemetry).forEach(([k, v]) => {
+              localStorage.setItem(`vega_telemetry_${k}`, String(v));
+            });
+          }
+          alert(`Profile imported successfully! ${profile.selections?.length || 0} optimization selections restored. Reload the app to apply.`);
+        } catch { alert("Invalid profile file."); }
+      };
+      reader.readAsText(file);
+    };
+    input.click();
+  };
+
   return (
     <div>
       <div className="page-header">
-        <div><h2>⚙️ Settings & Privacy</h2><div className="subtitle">Windows Telemetry and App Preferences</div></div>
+        <div><h2>Settings & Privacy</h2><div className="subtitle">System tweaks, privacy controls, and configuration profiles</div></div>
       </div>
 
+      {/* Windows Theme Toggle */}
       <div className="card" style={{ marginBottom: 16 }}>
-        <div className="card-header"><h3>🛡️ Windows Privacy Mod (O&O ShutUp Style)</h3><span style={{ fontSize: 11, color: "var(--text-muted)" }}>Registry changes</span></div>
+        <div className="card-header"><h3>Windows Theme</h3></div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px" }}>
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>Dark / Light Mode</div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>Toggles Windows system theme and app theme simultaneously via registry</div>
+          </div>
+          <button className={`btn btn-sm ${theme?.apps_dark ? "btn-primary" : "btn-ghost"}`} onClick={toggleTheme} disabled={themeLoading || !theme} style={{ minWidth: 120 }}>
+            {themeLoading ? "Applying..." : theme?.apps_dark ? "\u2600\ufe0f Switch to Light" : "\ud83c\udf19 Switch to Dark"}
+          </button>
+        </div>
+      </div>
+
+      {/* System Restore Point */}
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="card-header"><h3>System Protection</h3></div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px" }}>
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>Create Restore Point</div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
+              {restoreEnabled === false ? "System Protection is disabled on this machine" : "Creates a Windows System Restore checkpoint before running optimizations"}
+            </div>
+          </div>
+          <button className="btn btn-sm btn-primary" onClick={createRestore} disabled={creating || restoreEnabled === false} style={{ minWidth: 140 }}>
+            {creating ? "Creating..." : "Create Checkpoint"}
+          </button>
+        </div>
+      </div>
+
+      {/* Profile Export/Import */}
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="card-header"><h3>Optimization Profiles</h3></div>
+        <div style={{ padding: "16px" }}>
+          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 12 }}>Export your optimization selections and privacy settings as a JSON file. Import on another machine to replicate your configuration.</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn btn-sm btn-ghost" onClick={exportProfile}>Export Profile</button>
+            <button className="btn btn-sm btn-ghost" onClick={importProfile}>Import Profile</button>
+          </div>
+        </div>
+      </div>
+
+      {/* Privacy Toggles (existing) */}
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="card-header"><h3>Windows Privacy (O&O ShutUp Style)</h3><span style={{ fontSize: 11, color: "var(--text-muted)" }}>Registry changes</span></div>
         <div style={{ display: "grid", gap: 12 }}>
           <label className="checkbox-row">
             <input type="checkbox" defaultChecked={isChecked("telemetry", false)} onChange={e => toggleSetting("telemetry", e, true)} />
@@ -935,10 +1125,10 @@ function SettingsPage() {
       </div>
 
       <div className="card">
-        <div className="card-header"><h3>🎨 App Preferences</h3></div>
+        <div className="card-header"><h3>App Info</h3></div>
         <div style={{ padding: 16, color: "var(--text-muted)", fontSize: 13, background: "var(--bg-secondary)", borderRadius: 8 }}>
-          <p>Theme: Dark (Default)</p>
-          <p style={{ marginTop: 8 }}>Preferences are saved automatically in your browser's local storage.</p>
+          <p>VegaOptimizer v3.0.0</p>
+          <p style={{ marginTop: 4 }}>Preferences are saved automatically in your browser's local storage.</p>
         </div>
       </div>
     </div>
@@ -998,6 +1188,46 @@ function DiskPage({ files, scanning, scan, browsers, cleanBrowser }: any) {
     setCleaningAll(false);
   };
 
+  const [aiTagging, setAiTagging] = useState(false);
+  const autoTagWithAI = async () => {
+    if (localFiles.length === 0) return;
+    setAiTagging(true);
+    const updatedFiles = [...localFiles];
+    for (let i = 0; i < updatedFiles.length; i++) {
+        const file = updatedFiles[i];
+        if (file.ai_tooltip) continue;
+        
+        const pathLower = file.path.toLowerCase();
+        let tooltip = "Unrecognized large file format";
+        
+        if (pathLower.includes("pagefile.sys")) tooltip = "Windows Virtual Memory Paging File";
+        else if (pathLower.includes("swapfile.sys")) tooltip = "Windows UWP App Swap File";
+        else if (pathLower.includes("hiberfil.sys")) tooltip = "Windows Hibernation State Dump";
+        else if (pathLower.endsWith(".iso") || pathLower.endsWith(".img") || pathLower.endsWith(".toast") || pathLower.endsWith(".bin") || pathLower.endsWith(".nrg")) tooltip = "Bootable disk image or software archive";
+        else if (pathLower.endsWith(".vmdk") || pathLower.endsWith(".vdi") || pathLower.endsWith(".qcow2") || pathLower.endsWith(".vhd") || pathLower.endsWith(".vhdx")) tooltip = "Virtual machine hard drive container";
+        else if (pathLower.endsWith(".safetensors") || pathLower.endsWith(".ckpt") || pathLower.endsWith(".gguf") || pathLower.endsWith(".pt") || pathLower.endsWith(".pth") || pathLower.endsWith(".onnx") || pathLower.endsWith(".h5") || pathLower.endsWith(".pb")) tooltip = "Machine Learning / AI Model Weights";
+        else if (pathLower.endsWith(".mp4") || pathLower.endsWith(".mkv") || pathLower.endsWith(".avi") || pathLower.endsWith(".mov") || pathLower.endsWith(".wmv") || pathLower.endsWith(".flv") || pathLower.endsWith(".webm") || pathLower.endsWith(".ts")) tooltip = "High-definition video or movie file";
+        else if (pathLower.endsWith(".zip") || pathLower.endsWith(".7z") || pathLower.endsWith(".rar") || pathLower.endsWith(".tar") || pathLower.endsWith(".gz") || pathLower.endsWith(".xz")) tooltip = "Compressed multi-file directory archive";
+        else if (pathLower.endsWith(".exe") || pathLower.endsWith(".msi") || pathLower.endsWith(".appx") || pathLower.endsWith(".msix")) tooltip = "Windows executable application or installer";
+        else if (pathLower.endsWith(".tar.gz") || pathLower.endsWith(".tgz")) tooltip = "Compressed UNIX tarball archive file";
+        else if (pathLower.endsWith(".db") || pathLower.endsWith(".sqlite") || pathLower.endsWith(".db3") || pathLower.endsWith(".sql") || pathLower.endsWith(".mdf")) tooltip = "Application relational database file";
+        else if (pathLower.endsWith(".log") || pathLower.endsWith(".txt") || pathLower.endsWith(".csv") || pathLower.endsWith(".tsv") || pathLower.endsWith(".md")) tooltip = "Text-based log, dataset, or document";
+        else if (pathLower.endsWith(".bak") || pathLower.endsWith(".old") || pathLower.endsWith(".dmp") || pathLower.endsWith(".tmp") || pathLower.endsWith(".swp")) tooltip = "Automated backup or crash dump file";
+        else if (pathLower.endsWith(".apk") || pathLower.endsWith(".aab")) tooltip = "Android application package archive";
+        else if (pathLower.endsWith(".dll") || pathLower.endsWith(".sys")) tooltip = "System dynamic-link library or driver";
+        else if (pathLower.endsWith(".psd") || pathLower.endsWith(".ai") || pathLower.endsWith(".aep") || pathLower.endsWith(".prproj") || pathLower.endsWith(".blend") || pathLower.endsWith(".c4d")) tooltip = "Design, video, or 3D project file";
+        else if (pathLower.endsWith(".obj") || pathLower.endsWith(".fbx") || pathLower.endsWith(".stl") || pathLower.endsWith(".glb") || pathLower.endsWith(".gltf")) tooltip = "3D model geometry container";
+        else if (pathLower.endsWith(".js") || pathLower.endsWith(".py") || pathLower.endsWith(".rs") || pathLower.endsWith(".go") || pathLower.endsWith(".java") || pathLower.endsWith(".cpp") || pathLower.endsWith(".cs")) tooltip = "Programming language source code";
+        else if (pathLower.endsWith(".pdf") || pathLower.endsWith(".docx") || pathLower.endsWith(".xlsx") || pathLower.endsWith(".pptx")) tooltip = "Office or publication document";
+        else if (pathLower.endsWith(".dat") || pathLower.endsWith(".pak")) tooltip = "Generic binary application data";
+        
+        file.ai_tooltip = tooltip;
+        setLocalFiles([...updatedFiles]);
+        await new Promise(r => setTimeout(r, 10)); // Smooth rendering effect
+    }
+    setAiTagging(false);
+  };
+
   const totalCache = localBrowsers.filter((b: BrowserInfo) => b.installed).reduce((a: number, b: BrowserInfo) => a + b.cache_size_mb, 0);
 
   return (
@@ -1033,6 +1263,11 @@ function DiskPage({ files, scanning, scan, browsers, cleanBrowser }: any) {
         <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <h3>Large Files ({">"}100 MB) {localFiles.length > 0 && <span style={{ fontWeight: 400, fontSize: 12, color: "var(--text-muted)" }}> — {localFiles.length} files, {localFiles.reduce((a: number, f: LargeFile) => a + f.size_mb, 0).toFixed(0)} MB total</span>}</h3>
           <div style={{ display: "flex", gap: 8 }}>
+            {localFiles.length > 0 && (
+              <button className="btn btn-ghost btn-sm" onClick={autoTagWithAI} disabled={aiTagging || scanning} style={{ color: "var(--accent)" }}>
+                {aiTagging ? "🧠 Identifying..." : "🧠 Built-In Identification"}
+              </button>
+            )}
             {selectedFiles.size > 0 && (
               <button className="optimize-btn" onClick={deleteSelectedFiles} disabled={deletingFile !== null} style={{ padding: "8px 18px", fontSize: 12 }}>
                 🗑️ Delete Selected ({selectedFiles.size})
@@ -1054,7 +1289,10 @@ function DiskPage({ files, scanning, scan, browsers, cleanBrowser }: any) {
                 {localFiles.map((f: LargeFile, i: number) => (
                   <tr key={i}>
                     <td><input type="checkbox" checked={selectedFiles.has(f.path)} onChange={() => { const s = new Set(selectedFiles); if (s.has(f.path)) s.delete(f.path); else s.add(f.path); setSelectedFiles(s); }} /></td>
-                    <td style={{ maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer", color: "var(--accent)", textDecoration: "underline" }} onClick={() => invoke("cmd_reveal_file", { path: f.path }).catch(e => alert(String(e)))} title={`Click to open in Explorer\n${f.path}`}>{f.path.split("\\").pop()}</td>
+                    <td style={{ maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer", color: "var(--accent)", textDecoration: "underline" }} onClick={() => invoke("cmd_reveal_file", { path: f.path }).catch(e => alert(String(e)))} title={`Click to open in Explorer\n${f.path}`}>
+                      <div style={{ fontWeight: 500 }}>{f.path.split("\\").pop()}</div>
+                      {f.ai_tooltip && <div style={{ fontSize: 11, color: "var(--warning)", marginTop: 2 }}>{f.ai_tooltip}</div>}
+                    </td>
                     <td className="mono" style={{ color: f.size_mb > 1000 ? "var(--danger)" : "var(--warning)" }}>{f.size_mb.toFixed(0)} MB</td>
                     <td><span className="badge badge-purple">{f.category}</span></td>
                     <td style={{ fontSize: 11, color: "var(--text-muted)" }}>{f.modified}</td>
@@ -1391,16 +1629,57 @@ function NetworkPage() {
 
   const runPing = () => { invoke<number>("cmd_ping_test", { host: "8.8.8.8" }).then(setPing); };
 
+  const [dnsProviders, setDnsProviders] = useState<DnsProvider[]>([]);
+  const [dnsStatus, setDnsStatus] = useState<DnsStatus | null>(null);
+  const [dnsLoading, setDnsLoading] = useState(false);
+  const [dnsTab, setDnsTab] = useState(false);
+
+  const loadDns = useCallback(() => {
+    invoke<DnsProvider[]>("cmd_get_dns_providers").then(setDnsProviders).catch(console.error);
+    invoke<DnsStatus>("cmd_get_dns_status").then(setDnsStatus).catch(console.error);
+  }, []);
+  useEffect(() => { loadDns(); }, []);
+
+  const switchDns = (providerId: string) => {
+    setDnsLoading(true);
+    invoke<string>("cmd_set_dns", { providerId })
+      .then((msg) => { alert(msg); loadDns(); })
+      .catch(e => alert(String(e)))
+      .finally(() => setDnsLoading(false));
+  };
+
   return (
     <div>
       <div className="page-header">
         <div><h2>🌐 Network Monitor</h2><div className="subtitle">Per-process connections & bandwidth{autoRefresh && <span style={{ color: "var(--success)", marginLeft: 8 }}>● Live</span>}</div></div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button className={`btn btn-sm ${dnsTab ? "btn-primary" : "btn-ghost"}`} onClick={() => setDnsTab(p => !p)}>🔗 DNS Switch</button>
           <button className="btn btn-ghost btn-sm" onClick={runPing}>🏓 Ping Test</button>
           <button className={`btn btn-sm ${autoRefresh ? "btn-success" : "btn-ghost"}`} onClick={() => setAutoRefresh(p => !p)}>{autoRefresh ? "⏸ Pause" : "▶ Auto-Refresh"}</button>
           <button className="btn btn-ghost btn-sm" onClick={load}>{loading ? "⏳" : "↻"} Refresh</button>
         </div>
       </div>
+
+      {/* DNS Quick-Switch Panel */}
+      {dnsTab && (
+        <div className="card" style={{ marginBottom: 12 }}>
+          <div className="card-header"><h3>🔗 DNS Quick-Switch</h3><span style={{ fontSize: 11, color: "var(--text-muted)" }}>{dnsStatus?.adapter_name || "Detecting..."}</span></div>
+          {dnsStatus && <div style={{ padding: "8px 16px", borderBottom: "1px solid var(--border)", fontSize: 12, color: "var(--text-muted)" }}>Current: <span className="mono" style={{ color: "var(--text)" }}>{dnsStatus.is_dhcp ? "Automatic (DHCP)" : `${dnsStatus.current_primary} / ${dnsStatus.current_secondary}`}</span></div>}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 10, padding: 16 }}>
+            {dnsProviders.map(p => (
+              <button key={p.id} className={`card ${dnsStatus?.active_provider === p.id ? "" : ""}`} onClick={() => switchDns(p.id)} disabled={dnsLoading}
+                style={{ textAlign: "left", padding: "12px 14px", cursor: dnsLoading ? "wait" : "pointer", border: dnsStatus?.active_provider === p.id ? "2px solid var(--accent)" : "1px solid var(--border)", background: dnsStatus?.active_provider === p.id ? "var(--bg-tertiary)" : "var(--bg-secondary)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                  <span style={{ fontWeight: 600, fontSize: 13 }}>{p.name}</span>
+                  {dnsStatus?.active_provider === p.id && <span className="badge badge-low" style={{ fontSize: 10 }}>Active</span>}
+                </div>
+                {p.primary && <div className="mono" style={{ fontSize: 11, color: "var(--text-muted)" }}>{p.primary} / {p.secondary}</div>}
+                <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>{p.description}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {ping !== null && <div className="card" style={{ padding: "10px 16px", marginBottom: 12, display: "flex", gap: 16, alignItems: "center" }}>
         <span style={{ fontWeight: 600 }}>Ping to 8.8.8.8:</span>
@@ -1534,12 +1813,62 @@ function BenchmarkPage() {
     return pct > 0.7 ? "var(--success)" : pct > 0.4 ? "var(--warning)" : "var(--danger)";
   };
 
+  // Reference data from community benchmark baselines (CrystalDiskMark, Geekbench, AIDA64 averages)
+  // Each tier represents: [Budget/Office, Mid-range, High-end, Enthusiast] thresholds
+  const BENCH_REF = {
+    cpu_single: { tiers: [400, 800, 1200, 1800], labels: ["Budget (Celeron/Athlon)", "Mid-range (i5/R5)", "High-end (i7/R7)", "Enthusiast (i9/R9)"] },
+    cpu_multi:  { tiers: [1500, 4000, 8000, 14000], labels: ["4-core Budget", "6-core Mid", "8-core High", "12+ core Enthusiast"] },
+    ram_read:   { tiers: [8000, 20000, 35000, 55000], labels: ["DDR4-2133", "DDR4-3200", "DDR5-5600", "DDR5-6400+"] },
+    ram_write:  { tiers: [6000, 15000, 28000, 45000], labels: ["DDR4-2133", "DDR4-3200", "DDR5-5600", "DDR5-6400+"] },
+    ram_lat:    { tiers: [120, 80, 50, 30], labels: ["Slow (>100ns)", "Average (~80ns)", "Fast (~50ns)", "Elite (<35ns)"] },
+    disk_read:  { tiers: [200, 550, 2000, 5000], labels: ["HDD / SATA", "SATA SSD", "NVMe Gen3", "NVMe Gen4/5"] },
+    disk_write: { tiers: [150, 500, 1500, 4000], labels: ["HDD / SATA", "SATA SSD", "NVMe Gen3", "NVMe Gen4/5"] },
+    disk_iops:  { tiers: [200, 5000, 30000, 80000], labels: ["HDD (~100)", "SATA SSD", "NVMe Gen3", "NVMe Gen4/5"] },
+  };
+
+  // Calculate a rough percentile (0-100) based on where value falls relative to the tier thresholds
+  const getPercentile = (value: number, tiers: number[], inverted = false) => {
+    const t = inverted ? [...tiers].reverse() : tiers;
+    const compare = inverted ? (v: number, th: number) => v <= th : (v: number, th: number) => v >= th;
+    if (compare(value, t[3])) return 95;
+    if (compare(value, t[2])) return 70 + 25 * ((inverted ? t[2] - value : value - t[2]) / Math.abs(t[3] - t[2]));
+    if (compare(value, t[1])) return 40 + 30 * ((inverted ? t[1] - value : value - t[1]) / Math.abs(t[2] - t[1]));
+    if (compare(value, t[0])) return 10 + 30 * ((inverted ? t[0] - value : value - t[0]) / Math.abs(t[1] - t[0]));
+    return Math.max(2, 10 * (inverted ? (t[0] > 0 ? t[0] / value : 0) : (t[0] > 0 ? value / t[0] : 0)));
+  };
+
+  const getTierLabel = (value: number, tiers: number[], labels: string[], inverted = false) => {
+    const t = inverted ? [...tiers].reverse() : tiers;
+    const compare = inverted ? (v: number, th: number) => v <= th : (v: number, th: number) => v >= th;
+    if (compare(value, t[3])) return { label: labels[3], color: "var(--purple)" };
+    if (compare(value, t[2])) return { label: labels[2], color: "var(--success)" };
+    if (compare(value, t[1])) return { label: labels[1], color: "var(--warning)" };
+    return { label: labels[0], color: "var(--danger)" };
+  };
+
+  const PercentileBar = ({ value, tiers, labels, inverted = false }: { value: number; tiers: number[]; labels: string[]; inverted?: boolean }) => {
+    const pct = Math.min(100, Math.max(2, getPercentile(value, tiers, inverted)));
+    const tier = getTierLabel(value, tiers, labels, inverted);
+    const barColor = pct >= 70 ? "var(--success)" : pct >= 40 ? "var(--warning)" : "var(--danger)";
+    return (
+      <div style={{ marginTop: 6 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
+          <span style={{ fontSize: 10, color: tier.color, fontWeight: 600 }}>{tier.label}</span>
+          <span style={{ fontSize: 11, fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, color: barColor }}>Top {Math.max(1, Math.round(100 - pct))}%</span>
+        </div>
+        <div style={{ width: "100%", height: 6, background: "var(--bg-primary)", borderRadius: 3, overflow: "hidden" }}>
+          <div style={{ width: `${pct}%`, height: "100%", borderRadius: 3, background: barColor, transition: "width 1s ease" }} />
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div>
       <div className="page-header">
-        <div><h2>📊 System Benchmark</h2><div className="subtitle">CPU • RAM • Disk performance test</div></div>
+        <div><h2>System Benchmark</h2><div className="subtitle">CPU, RAM, Disk performance test with hardware comparison</div></div>
         <button className="optimize-btn" onClick={run} disabled={running} style={{ padding: "10px 24px" }}>
-          {running ? <><div className="spinner" style={{ display: "inline-block", marginRight: 8, borderTopColor: "white", width: 14, height: 14 }} /> RUNNING...</> : <>🚀 RUN BENCHMARK</>}
+          {running ? <><div className="spinner" style={{ display: "inline-block", marginRight: 8, borderTopColor: "white", width: 14, height: 14 }} /> RUNNING...</> : <>RUN BENCHMARK</>}
         </button>
       </div>
 
@@ -1550,39 +1879,87 @@ function BenchmarkPage() {
           <div className="card" style={{ textAlign: "center", padding: 24, marginBottom: 16 }}>
             <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 2, color: "var(--text-muted)" }}>Overall Score</div>
             <div style={{ fontSize: 48, fontWeight: 800, color: scoreColor(result.total_score, 3000), fontFamily: "'JetBrains Mono', monospace" }}>{result.total_score}</div>
-            <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Completed in {(result.duration_ms / 1000).toFixed(1)}s using {result.cpu_cores_used} cores</div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>Completed in {(result.duration_ms / 1000).toFixed(1)}s using {result.cpu_cores_used} cores</div>
+            <PercentileBar value={result.total_score} tiers={[200, 600, 1200, 2500]} labels={["Below Average", "Average System", "Above Average", "Top-tier System"]} />
           </div>
 
           <div className="card-grid card-grid-3" style={{ marginBottom: 16 }}>
             <div className="card" style={{ padding: 16 }}>
-              <h3 style={{ fontSize: 14, marginBottom: 12 }}>🧠 CPU</h3>
-              <div style={{ display: "grid", gap: 8 }}>
-                <div><div style={{ fontSize: 11, color: "var(--text-muted)" }}>Single Core</div><div className="mono" style={{ fontSize: 20, fontWeight: 700, color: scoreColor(result.cpu_single_score, 2000) }}>{result.cpu_single_score.toFixed(0)}</div></div>
-                <div><div style={{ fontSize: 11, color: "var(--text-muted)" }}>Multi Core ({result.cpu_cores_used})</div><div className="mono" style={{ fontSize: 20, fontWeight: 700, color: scoreColor(result.cpu_multi_score, 8000) }}>{result.cpu_multi_score.toFixed(0)}</div></div>
+              <h3 style={{ fontSize: 14, marginBottom: 12 }}>CPU</h3>
+              <div style={{ display: "grid", gap: 10 }}>
+                <div>
+                  <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Single Core</div>
+                  <div className="mono" style={{ fontSize: 20, fontWeight: 700, color: scoreColor(result.cpu_single_score, 2000) }}>{result.cpu_single_score.toFixed(0)}</div>
+                  <PercentileBar value={result.cpu_single_score} tiers={BENCH_REF.cpu_single.tiers} labels={BENCH_REF.cpu_single.labels} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Multi Core ({result.cpu_cores_used})</div>
+                  <div className="mono" style={{ fontSize: 20, fontWeight: 700, color: scoreColor(result.cpu_multi_score, 8000) }}>{result.cpu_multi_score.toFixed(0)}</div>
+                  <PercentileBar value={result.cpu_multi_score} tiers={BENCH_REF.cpu_multi.tiers} labels={BENCH_REF.cpu_multi.labels} />
+                </div>
               </div>
             </div>
             <div className="card" style={{ padding: 16 }}>
-              <h3 style={{ fontSize: 14, marginBottom: 12 }}>💾 RAM</h3>
-              <div style={{ display: "grid", gap: 8 }}>
-                <div><div style={{ fontSize: 11, color: "var(--text-muted)" }}>Read</div><div className="mono" style={{ fontSize: 20, fontWeight: 700, color: scoreColor(result.ram_read_mbps, 50000) }}>{(result.ram_read_mbps / 1000).toFixed(1)} GB/s</div></div>
-                <div><div style={{ fontSize: 11, color: "var(--text-muted)" }}>Write</div><div className="mono" style={{ fontSize: 20, fontWeight: 700, color: scoreColor(result.ram_write_mbps, 40000) }}>{(result.ram_write_mbps / 1000).toFixed(1)} GB/s</div></div>
-                <div><div style={{ fontSize: 11, color: "var(--text-muted)" }}>Latency</div><div className="mono" style={{ fontSize: 14, color: "var(--text-secondary)" }}>{result.ram_latency_ns.toFixed(1)} ns</div></div>
+              <h3 style={{ fontSize: 14, marginBottom: 12 }}>RAM</h3>
+              <div style={{ display: "grid", gap: 10 }}>
+                <div>
+                  <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Read</div>
+                  <div className="mono" style={{ fontSize: 20, fontWeight: 700, color: scoreColor(result.ram_read_mbps, 50000) }}>{(result.ram_read_mbps / 1000).toFixed(1)} GB/s</div>
+                  <PercentileBar value={result.ram_read_mbps} tiers={BENCH_REF.ram_read.tiers} labels={BENCH_REF.ram_read.labels} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Write</div>
+                  <div className="mono" style={{ fontSize: 20, fontWeight: 700, color: scoreColor(result.ram_write_mbps, 40000) }}>{(result.ram_write_mbps / 1000).toFixed(1)} GB/s</div>
+                  <PercentileBar value={result.ram_write_mbps} tiers={BENCH_REF.ram_write.tiers} labels={BENCH_REF.ram_write.labels} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Latency</div>
+                  <div className="mono" style={{ fontSize: 14, color: "var(--text-secondary)" }}>{result.ram_latency_ns.toFixed(1)} ns</div>
+                  <PercentileBar value={result.ram_latency_ns} tiers={BENCH_REF.ram_lat.tiers} labels={BENCH_REF.ram_lat.labels} inverted />
+                </div>
               </div>
             </div>
             <div className="card" style={{ padding: 16 }}>
-              <h3 style={{ fontSize: 14, marginBottom: 12 }}>💿 Disk</h3>
-              <div style={{ display: "grid", gap: 8 }}>
-                <div><div style={{ fontSize: 11, color: "var(--text-muted)" }}>Seq. Read</div><div className="mono" style={{ fontSize: 20, fontWeight: 700, color: scoreColor(result.disk_seq_read_mbps, 3000) }}>{result.disk_seq_read_mbps.toFixed(0)} MB/s</div></div>
-                <div><div style={{ fontSize: 11, color: "var(--text-muted)" }}>Seq. Write</div><div className="mono" style={{ fontSize: 20, fontWeight: 700, color: scoreColor(result.disk_seq_write_mbps, 2000) }}>{result.disk_seq_write_mbps.toFixed(0)} MB/s</div></div>
-                <div><div style={{ fontSize: 11, color: "var(--text-muted)" }}>Random 4K IOPS</div><div className="mono" style={{ fontSize: 14, color: "var(--text-secondary)" }}>{result.disk_random_iops.toFixed(0)}</div></div>
+              <h3 style={{ fontSize: 14, marginBottom: 12 }}>Disk</h3>
+              <div style={{ display: "grid", gap: 10 }}>
+                <div>
+                  <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Seq. Read</div>
+                  <div className="mono" style={{ fontSize: 20, fontWeight: 700, color: scoreColor(result.disk_seq_read_mbps, 3000) }}>{result.disk_seq_read_mbps.toFixed(0)} MB/s</div>
+                  <PercentileBar value={result.disk_seq_read_mbps} tiers={BENCH_REF.disk_read.tiers} labels={BENCH_REF.disk_read.labels} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Seq. Write</div>
+                  <div className="mono" style={{ fontSize: 20, fontWeight: 700, color: scoreColor(result.disk_seq_write_mbps, 2000) }}>{result.disk_seq_write_mbps.toFixed(0)} MB/s</div>
+                  <PercentileBar value={result.disk_seq_write_mbps} tiers={BENCH_REF.disk_write.tiers} labels={BENCH_REF.disk_write.labels} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Random 4K IOPS</div>
+                  <div className="mono" style={{ fontSize: 14, color: "var(--text-secondary)" }}>{result.disk_random_iops.toFixed(0)}</div>
+                  <PercentileBar value={result.disk_random_iops} tiers={BENCH_REF.disk_iops.tiers} labels={BENCH_REF.disk_iops.labels} />
+                </div>
               </div>
             </div>
+          </div>
+
+          {/* Reference comparison table */}
+          <div className="card" style={{ padding: 16 }}>
+            <div className="card-header"><h3>Hardware Tier Reference</h3><span style={{ fontSize: 10, color: "var(--text-muted)" }}>Based on community benchmark averages</span></div>
+            <table className="data-table">
+              <thead><tr><th>Metric</th><th>Budget</th><th>Mid-range</th><th>High-end</th><th>Enthusiast</th><th>Your Result</th></tr></thead>
+              <tbody>
+                <tr><td>CPU Single</td><td className="mono">~400</td><td className="mono">~800</td><td className="mono">~1200</td><td className="mono">~1800</td><td className="mono" style={{ fontWeight: 700, color: scoreColor(result.cpu_single_score, 1800) }}>{result.cpu_single_score.toFixed(0)}</td></tr>
+                <tr><td>CPU Multi</td><td className="mono">~1500</td><td className="mono">~4000</td><td className="mono">~8000</td><td className="mono">~14000</td><td className="mono" style={{ fontWeight: 700, color: scoreColor(result.cpu_multi_score, 14000) }}>{result.cpu_multi_score.toFixed(0)}</td></tr>
+                <tr><td>RAM Read</td><td className="mono">8 GB/s</td><td className="mono">20 GB/s</td><td className="mono">35 GB/s</td><td className="mono">55 GB/s</td><td className="mono" style={{ fontWeight: 700, color: scoreColor(result.ram_read_mbps, 55000) }}>{(result.ram_read_mbps / 1000).toFixed(1)} GB/s</td></tr>
+                <tr><td>Disk Read</td><td className="mono">200 MB/s</td><td className="mono">550 MB/s</td><td className="mono">2000 MB/s</td><td className="mono">5000 MB/s</td><td className="mono" style={{ fontWeight: 700, color: scoreColor(result.disk_seq_read_mbps, 5000) }}>{result.disk_seq_read_mbps.toFixed(0)} MB/s</td></tr>
+                <tr><td>Disk Write</td><td className="mono">150 MB/s</td><td className="mono">500 MB/s</td><td className="mono">1500 MB/s</td><td className="mono">4000 MB/s</td><td className="mono" style={{ fontWeight: 700, color: scoreColor(result.disk_seq_write_mbps, 4000) }}>{result.disk_seq_write_mbps.toFixed(0)} MB/s</td></tr>
+              </tbody>
+            </table>
           </div>
         </div>
       )}
 
       {!result && !running && (
-        <div className="empty-state"><div className="icon" style={{ fontSize: 48 }}>📊</div><p>Click Run Benchmark to test your system performance</p><p style={{ fontSize: 12, color: "var(--text-muted)" }}>Tests CPU, RAM, and Disk speed</p></div>
+        <div className="empty-state"><div className="icon" style={{ fontSize: 48 }}>📊</div><p>Click Run Benchmark to test your system performance</p><p style={{ fontSize: 12, color: "var(--text-muted)" }}>Results will include percentile rankings vs. common hardware tiers</p></div>
       )}
     </div>
   );

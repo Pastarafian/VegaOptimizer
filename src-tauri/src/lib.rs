@@ -3,6 +3,7 @@ mod benchmark;
 mod debloater;
 mod disk_cleanup;
 mod disk_health;
+mod dns;
 mod duplicates;
 mod monitor;
 mod network;
@@ -11,6 +12,7 @@ mod registry;
 mod scanner;
 mod services;
 mod startup;
+mod tweaks;
 
 use monitor::{get_hardware_info, get_health_score, get_live_metrics};
 use optimizer::{get_optimization_catalog, get_processes, get_system_info, run_optimization};
@@ -26,7 +28,7 @@ use startup::{list_startup_programs, toggle_startup};
 
 /// Wraps a blocking closure in tokio's spawn_blocking, used by every command.
 async fn bg<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
-    tokio::task::spawn_blocking(f).await.unwrap()
+    tokio::task::spawn_blocking(f).await.expect("Background task panicked")
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -109,9 +111,10 @@ async fn cmd_delete_file(path: String) -> Result<String, String> {
         if !p.is_file() {
             return Err("Not a file".to_string());
         }
-        // Safety: refuse to delete from system dirs
+        // Safety: refuse to delete from system dirs (dynamic lookup for non-C: installs)
         let lower = path.to_lowercase();
-        if lower.starts_with("c:\\windows") || lower.starts_with("c:\\program files") {
+        let sys_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string()).to_lowercase();
+        if lower.starts_with(&sys_root) || lower.starts_with("c:\\program files") {
             return Err("Cannot delete system files".to_string());
         }
         let size = p.metadata().map(|m| m.len()).unwrap_or(0);
@@ -886,6 +889,49 @@ async fn cmd_toggle_telemetry(setting: String, disable: bool) -> Result<String, 
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// DNS Quick-Switch
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[tauri::command]
+async fn cmd_get_dns_providers() -> Vec<dns::DnsProvider> {
+    bg(|| dns::get_dns_providers()).await
+}
+
+#[tauri::command]
+async fn cmd_get_dns_status() -> Result<dns::DnsStatus, String> {
+    bg(|| dns::get_dns_status()).await
+}
+
+#[tauri::command]
+async fn cmd_set_dns(provider_id: String) -> Result<String, String> {
+    bg(move || dns::set_dns_provider(&provider_id)).await
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// System Tweaks (Theme, Restore Points)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[tauri::command]
+async fn cmd_get_theme_status() -> tweaks::ThemeStatus {
+    bg(|| tweaks::get_theme_status()).await
+}
+
+#[tauri::command]
+async fn cmd_set_dark_mode(enabled: bool) -> Result<String, String> {
+    bg(move || tweaks::set_dark_mode(enabled)).await
+}
+
+#[tauri::command]
+async fn cmd_create_restore_point(description: String) -> Result<String, String> {
+    bg(move || tweaks::create_restore_point(&description)).await
+}
+
+#[tauri::command]
+async fn cmd_is_restore_enabled() -> bool {
+    bg(|| tweaks::is_restore_enabled()).await
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // App Entry
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -970,6 +1016,15 @@ pub fn run() {
             // File delete
             cmd_delete_file,
             cmd_reveal_file,
+            // DNS Quick-Switch
+            cmd_get_dns_providers,
+            cmd_get_dns_status,
+            cmd_set_dns,
+            // System Tweaks
+            cmd_get_theme_status,
+            cmd_set_dark_mode,
+            cmd_create_restore_point,
+            cmd_is_restore_enabled,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

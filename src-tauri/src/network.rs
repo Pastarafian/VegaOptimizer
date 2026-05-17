@@ -129,32 +129,6 @@ pub fn get_network_connections() -> NetworkOverview {
         })
         .collect();
 
-    // Try to get per-process network I/O via ETW/perf counters
-    if let Ok(output) = Command::new("powershell")
-        .args(["-Command", r#"Get-Process | Where-Object { $_.Id -ne 0 } | Select-Object Id,ProcessName,@{N='Sent';E={try{(Get-NetTCPConnection -OwningProcess $_.Id -ErrorAction SilentlyContinue | Measure-Object).Count * 1024}catch{0}}},@{N='Recv';E={0}} | Where-Object { $_.Sent -gt 0 } | ForEach-Object { "$($_.Id)|$($_.Sent)|$($_.Recv)" } 2>$null"#])
-        .output()
-    {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let io_map: HashMap<u32, (u64, u64)> = stdout.lines()
-            .filter_map(|l| {
-                let p: Vec<&str> = l.split('|').collect();
-                if p.len() >= 3 {
-                    Some((
-                        p[0].parse().ok()?,
-                        (p[1].parse().unwrap_or(0), p[2].parse().unwrap_or(0))
-                    ))
-                } else { None }
-            })
-            .collect();
-
-        for talker in &mut top_talkers {
-            if let Some((sent, recv)) = io_map.get(&talker.pid) {
-                talker.bytes_sent = *sent;
-                talker.bytes_recv = *recv;
-            }
-        }
-    }
-
     top_talkers.sort_by(|a, b| b.connections.cmp(&a.connections));
 
     let tcp_established = connections

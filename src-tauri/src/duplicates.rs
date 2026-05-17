@@ -87,9 +87,10 @@ pub fn scan_duplicates(min_size_mb: f64) -> DuplicateScanResult {
                 let modified = std::fs::metadata(path)
                     .and_then(|m| m.modified())
                     .map(|t| {
-                        let dur = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-                        let secs = dur.as_secs();
-                        let days = secs / 86400;
+                        let dur = std::time::SystemTime::now()
+                            .duration_since(t)
+                            .unwrap_or_default();
+                        let days = dur.as_secs() / 86400;
                         if days > 365 {
                             format!("{:.0}y ago", days as f64 / 365.0)
                         } else if days > 30 {

@@ -1,4 +1,4 @@
-@import "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap";
+/* Fonts loaded via <link> in index.html for non-render-blocking performance */
 
 /* ═══════════════════════════════════════════════════════════════════
    VegaOptimizer — Design System v2
@@ -93,23 +93,23 @@ html, body, #root {
 }
 
 .sidebar-section {
-  padding: 6px 16px 4px;
-  font-size: 10px;
+  padding: 4px 16px 2px;
+  font-size: 9px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 1.5px;
   color: var(--text-muted);
-  margin-top: 8px;
+  margin-top: 6px;
 }
 
 .nav-item {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 9px 16px;
+  padding: 7px 16px;
   cursor: pointer;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 500;
   transition: all 0.15s;
   border-left: 3px solid transparent;
@@ -687,14 +687,53 @@ html, body, #root {
   font-family: 'JetBrains Mono', monospace;
 }
 
-/* Nav compactness for expanded sidebar */
-.nav-item {
-  padding: 7px 16px;
-  font-size: 12.5px;
+/* ═══════════ Keyboard Navigation ═══════════ */
+
+/* Suppress default focus outline for mouse users */
+.sidebar:focus, .main-content:focus { outline: none; }
+
+/* Active focus zone indicator — subtle glow on the focused region */
+.sidebar.focus-zone-active {
+  box-shadow: inset -2px 0 0 var(--accent), 0 0 12px var(--accent-glow);
 }
 
-.sidebar-section {
-  padding: 4px 16px 2px;
-  margin-top: 6px;
-  font-size: 9px;
+.main-content.focus-zone-active {
+  box-shadow: inset 2px 0 0 var(--accent), 0 0 8px var(--accent-glow);
+}
+
+/* Active nav item when sidebar is focused gets a visible highlight */
+.sidebar.focus-zone-active .nav-item.active {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+  box-shadow: 0 0 8px var(--accent-glow);
+}
+
+/* Focus-visible for individual nav items (keyboard tab) */
+.nav-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: var(--accent-dim);
+}
+
+/* Focus indicator for keyboard hint */
+.focus-zone-active::after {
+  content: '';
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 6px;
+  height: 6px;
+  background: var(--accent);
+  border-radius: 50%;
+  opacity: 0.7;
+  animation: focusPulse 2s ease infinite;
+  pointer-events: none;
+}
+
+.sidebar.focus-zone-active { position: relative; }
+.main-content.focus-zone-active { position: relative; }
+
+@keyframes focusPulse {
+  0%, 100% { opacity: 0.3; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.3); }
 }

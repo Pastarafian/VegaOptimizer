@@ -143,9 +143,13 @@ pub fn toggle_startup(name: &str, registry_path: &str, enable: bool) -> Result<S
 
     // Registry-based entry
     if enable {
-        // Move from RunDisabled back to Run
-        // This is a simplified approach
-        Ok(format!("Enabled startup entry: {}", name))
+        // The original value was deleted on disable and cannot be automatically restored.
+        // The user must re-run the application's installer or manually recreate the entry.
+        return Err(format!(
+            "Cannot re-enable '{}' automatically — the registry entry was removed. \
+             Re-run the application's installer or manually add it back to: {}",
+            name, registry_path
+        ));
     } else {
         // Delete the registry value to disable
         match Command::new("reg")

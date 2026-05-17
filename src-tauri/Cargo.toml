@@ -1,7 +1,7 @@
 [package]
 name = "vega-optimizer"
-version = "0.1.0"
-description = "VegaOptimizer — System Process Cleaner & Optimizer"
+version = "3.0.0"
+description = "VegaOptimizer — Advanced Windows System Optimizer & Toolkit"
 authors = ["Vega"]
 license = "GPL-3.0"
 edition = "2021"

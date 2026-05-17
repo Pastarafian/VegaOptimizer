@@ -124,11 +124,13 @@ pub fn scan_junk_categories() -> Vec<JunkCategory> {
     let temp = std::env::var("TEMP").unwrap_or_default();
     let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
     let appdata = std::env::var("APPDATA").unwrap_or_default();
+    let sys_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
+    let pd = std::env::var("ProgramData").unwrap_or_else(|_| "C:\\ProgramData".into());
     let mut cats = Vec::new();
 
     // Windows Temp
     let (s1, c1) = dir_stats(&temp);
-    let (s2, c2) = dir_stats("C:\\Windows\\Temp");
+    let (s2, c2) = dir_stats(&format!("{}\\Temp", sys_root));
     cats.push(JunkCategory {
         id: "windows_temp".into(),
         name: "Windows Temp Files".into(),
@@ -140,7 +142,7 @@ pub fn scan_junk_categories() -> Vec<JunkCategory> {
     });
 
     // Error Reports
-    let (s, c) = dir_stats("C:\\ProgramData\\Microsoft\\Windows\\WER");
+    let (s, c) = dir_stats(&format!("{}\\Microsoft\\Windows\\WER", pd));
     cats.push(JunkCategory {
         id: "error_reports".into(),
         name: "Windows Error Reports".into(),
@@ -152,7 +154,7 @@ pub fn scan_junk_categories() -> Vec<JunkCategory> {
     });
 
     // Windows Update Cache
-    let (s, c) = dir_stats("C:\\Windows\\SoftwareDistribution\\Download");
+    let (s, c) = dir_stats(&format!("{}\\SoftwareDistribution\\Download", sys_root));
     cats.push(JunkCategory {
         id: "update_cache".into(),
         name: "Windows Update Cache".into(),
@@ -164,7 +166,7 @@ pub fn scan_junk_categories() -> Vec<JunkCategory> {
     });
 
     // Delivery Optimization
-    let (s, c) = dir_stats("C:\\Windows\\SoftwareDistribution\\DeliveryOptimization");
+    let (s, c) = dir_stats(&format!("{}\\SoftwareDistribution\\DeliveryOptimization", sys_root));
     cats.push(JunkCategory {
         id: "delivery_opt".into(),
         name: "Delivery Optimization Cache".into(),
@@ -191,8 +193,9 @@ pub fn scan_junk_categories() -> Vec<JunkCategory> {
     // Crash Dumps
     let dump_path = format!("{}\\CrashDumps", local);
     let (s1, c1) = dir_stats(&dump_path);
-    let (s2, c2) = dir_stats("C:\\Windows\\Minidump");
-    let mem_dump = Path::new("C:\\Windows\\MEMORY.DMP");
+    let (s2, c2) = dir_stats(&format!("{}\\Minidump", sys_root));
+    let mem_dump_path = format!("{}\\MEMORY.DMP", sys_root);
+    let mem_dump = Path::new(&mem_dump_path);
     let ds = if mem_dump.exists() {
         mem_dump.metadata().map(|m| m.len()).unwrap_or(0) as f64 / 1_048_576.0
     } else {
@@ -223,7 +226,7 @@ pub fn scan_junk_categories() -> Vec<JunkCategory> {
     });
 
     // Windows Log Files
-    let (s, c) = dir_stats("C:\\Windows\\Logs");
+    let (s, c) = dir_stats(&format!("{}\\Logs", sys_root));
     cats.push(JunkCategory {
         id: "windows_logs".into(),
         name: "Windows Log Files".into(),
@@ -235,7 +238,7 @@ pub fn scan_junk_categories() -> Vec<JunkCategory> {
     });
 
     // Prefetch
-    let (s, c) = dir_stats("C:\\Windows\\Prefetch");
+    let (s, c) = dir_stats(&format!("{}\\Prefetch", sys_root));
     cats.push(JunkCategory {
         id: "prefetch".into(),
         name: "Prefetch Data".into(),
@@ -259,7 +262,7 @@ pub fn scan_junk_categories() -> Vec<JunkCategory> {
     });
 
     // Font Cache
-    let (s, c) = dir_stats("C:\\Windows\\ServiceProfiles\\LocalService\\AppData\\Local\\FontCache");
+    let (s, c) = dir_stats(&format!("{}\\ServiceProfiles\\LocalService\\AppData\\Local\\FontCache", sys_root));
     cats.push(JunkCategory {
         id: "font_cache".into(),
         name: "Font Cache".into(),
@@ -271,7 +274,7 @@ pub fn scan_junk_categories() -> Vec<JunkCategory> {
     });
 
     // Installer Patch Cache
-    let (s, c) = dir_stats("C:\\Windows\\Installer\\$PatchCache$");
+    let (s, c) = dir_stats(&format!("{}\\Installer\\$PatchCache$", sys_root));
     cats.push(JunkCategory {
         id: "patch_cache".into(),
         name: "Installer Patch Cache".into(),
@@ -294,29 +297,31 @@ pub fn clean_junk_category(id: &str) -> Result<CleanResult, String> {
     let temp = std::env::var("TEMP").unwrap_or_default();
     let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
     let appdata = std::env::var("APPDATA").unwrap_or_default();
+    let sys_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
+    let pd = std::env::var("ProgramData").unwrap_or_else(|_| "C:\\ProgramData".into());
 
     let paths: Vec<String> = match id {
-        "windows_temp" => vec![temp, "C:\\Windows\\Temp".into()],
-        "error_reports" => vec!["C:\\ProgramData\\Microsoft\\Windows\\WER".into()],
-        "update_cache" => vec!["C:\\Windows\\SoftwareDistribution\\Download".into()],
-        "delivery_opt" => vec!["C:\\Windows\\SoftwareDistribution\\DeliveryOptimization".into()],
+        "windows_temp" => vec![temp, format!("{}\\Temp", sys_root)],
+        "error_reports" => vec![format!("{}\\Microsoft\\Windows\\WER", pd)],
+        "update_cache" => vec![format!("{}\\SoftwareDistribution\\Download", sys_root)],
+        "delivery_opt" => vec![format!("{}\\SoftwareDistribution\\DeliveryOptimization", sys_root)],
         "thumbnails" => vec![format!("{}\\Microsoft\\Windows\\Explorer", local)],
         "crash_dumps" => vec![
             format!("{}\\CrashDumps", local),
-            "C:\\Windows\\Minidump".into(),
+            format!("{}\\Minidump", sys_root),
         ],
         "shader_cache" => vec![
             format!("{}\\NVIDIA\\GLCache", local),
             format!("{}\\AMD\\GLCache", local),
             format!("{}\\D3DSCache", local),
         ],
-        "windows_logs" => vec!["C:\\Windows\\Logs".into()],
-        "prefetch" => vec!["C:\\Windows\\Prefetch".into()],
+        "windows_logs" => vec![format!("{}\\Logs", sys_root)],
+        "prefetch" => vec![format!("{}\\Prefetch", sys_root)],
         "recent_items" => vec![format!("{}\\Microsoft\\Windows\\Recent", appdata)],
         "font_cache" => {
-            vec!["C:\\Windows\\ServiceProfiles\\LocalService\\AppData\\Local\\FontCache".into()]
+            vec![format!("{}\\ServiceProfiles\\LocalService\\AppData\\Local\\FontCache", sys_root)]
         }
-        "patch_cache" => vec!["C:\\Windows\\Installer\\$PatchCache$".into()],
+        "patch_cache" => vec![format!("{}\\Installer\\$PatchCache$", sys_root)],
         _ => return Err(format!("Unknown junk category: {}", id)),
     };
 
@@ -333,7 +338,8 @@ pub fn clean_junk_category(id: &str) -> Result<CleanResult, String> {
 
     // Special: delete MEMORY.DMP for crash_dumps
     if id == "crash_dumps" {
-        let mem_dump = Path::new("C:\\Windows\\MEMORY.DMP");
+        let mem_dump_path = format!("{}\\MEMORY.DMP", std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()));
+        let mem_dump = Path::new(&mem_dump_path);
         if mem_dump.exists() {
             if let Ok(meta) = mem_dump.metadata() {
                 total_freed += meta.len();
@@ -528,7 +534,7 @@ pub fn scan_stale_files(days_threshold: u64, max_results: usize) -> Vec<StaleFil
     let user = std::env::var("USERPROFILE").unwrap_or_default();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs();
 
     let scan_dirs = vec![
@@ -788,8 +794,10 @@ pub fn shred_file(path: &str, passes: u32) -> Result<ShredResult, String> {
         return Err("Not a file".into());
     }
 
+    let sys_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
     let lower = path.to_lowercase();
-    if lower.starts_with("c:\\windows") || lower.starts_with("c:\\program files") {
+    let sys_lower = sys_root.to_lowercase();
+    if lower.starts_with(&sys_lower) || lower.starts_with("c:\\program files") {
         return Err("Cannot shred system files".into());
     }
 
@@ -924,7 +932,7 @@ pub fn get_ai_suggestions() -> Vec<AiSuggestion> {
     let mut suggestions = Vec::new();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs();
 
     // Scan Downloads for old files

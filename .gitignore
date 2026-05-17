@@ -37,3 +37,5 @@ Desktop.ini
 
 # Misc
 *.local
+vegamcp_*
+eslint_out.json

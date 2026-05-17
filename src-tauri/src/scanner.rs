@@ -14,6 +14,7 @@ pub struct LargeFile {
     pub extension: String,
     pub category: String,
     pub modified: String,
+    pub ai_tooltip: Option<String>,
 }
 
 pub fn scan_large_files(min_size_mb: u64, max_results: usize) -> Vec<LargeFile> {
@@ -32,9 +33,11 @@ pub fn scan_large_files(min_size_mb: u64, max_results: usize) -> Vec<LargeFile> 
         "AppData",
     ];
 
+    let sys_drive = format!("{}\\" , std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into()));
+
     let mut stack = vec![
         (std::env::var("USERPROFILE").unwrap_or_default(), 0),
-        ("C:\\".to_string(), 0),
+        (sys_drive, 0),
     ];
 
     while let Some((dir, depth)) = stack.pop() {
@@ -66,7 +69,7 @@ pub fn scan_large_files(min_size_mb: u64, max_results: usize) -> Vec<LargeFile> 
                                 let secs = d.as_secs();
                                 let days_ago = (std::time::SystemTime::now()
                                     .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap()
+                                    .unwrap_or_default()
                                     .as_secs()
                                     - secs)
                                     / 86400;
@@ -86,6 +89,7 @@ pub fn scan_large_files(min_size_mb: u64, max_results: usize) -> Vec<LargeFile> 
                             extension: ext.clone(),
                             category: categorize_extension(&ext),
                             modified,
+                            ai_tooltip: None,
                         });
                     }
                 }
@@ -104,19 +108,131 @@ pub fn scan_large_files(min_size_mb: u64, max_results: usize) -> Vec<LargeFile> 
 
 fn categorize_extension(ext: &str) -> String {
     match ext {
-        "mp4" | "avi" | "mkv" | "mov" | "wmv" | "flv" | "webm" => "Video",
-        "mp3" | "flac" | "wav" | "aac" | "ogg" | "wma" => "Audio",
-        "jpg" | "jpeg" | "png" | "gif" | "bmp" | "tiff" | "webp" | "svg" => "Image",
-        "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz" => "Archive",
-        "iso" | "img" | "vhd" | "vhdx" => "Disk Image",
-        "exe" | "msi" | "dll" => "Application",
-        "log" | "txt" | "csv" => "Log/Text",
-        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" => "Document",
-        "bak" | "tmp" | "dmp" | "old" => "Backup/Temp",
+        // ── Video ────────────────────────────────────────────────────
+        | "mp4" | "m4v" | "avi" | "mkv" | "mov" | "wmv" | "flv" | "webm"
+        | "mpg" | "mpeg" | "m2v" | "m2ts" | "mts" | "ts" | "vob" | "ogv"
+        | "rm" | "rmvb" | "3gp" | "3g2" | "divx" | "xvid" | "asf" | "f4v"
+        | "hevc" | "h264" | "h265" => "Video",
+
+        // ── Audio ────────────────────────────────────────────────────
+        | "mp3" | "flac" | "wav" | "aac" | "ogg" | "oga" | "wma" | "m4a"
+        | "alac" | "aiff" | "aif" | "ape" | "opus" | "wv" | "mka" | "mid"
+        | "midi" | "amr" | "au" | "ra" | "dts" | "ac3" | "eac3" => "Audio",
+
+        // ── Image (raster + vector) ──────────────────────────────────
+        | "jpg" | "jpeg" | "jfif" | "png" | "gif" | "bmp" | "tif" | "tiff"
+        | "webp" | "svg" | "svgz" | "ico" | "cur" | "pcx" | "ppm" | "pgm"
+        | "pbm" | "tga" | "xbm" | "xpm" | "hdr" | "exr" | "avif" => "Image",
+
+        // ── RAW Photo ─────────────────────────────────────────────────
+        | "raw" | "cr2" | "cr3" | "nef" | "nrw" | "arw" | "srf" | "sr2"
+        | "dng" | "orf" | "rw2" | "pef" | "kdc" | "dcr" | "mrw" | "raf"
+        | "x3f" | "erf" | "mef" | "3fr" | "fff" => "RAW Photo",
+
+        // ── Archive / Compression ─────────────────────────────────────
+        | "zip" | "zipx" | "rar" | "r00" | "7z" | "tar" | "gz" | "tgz"
+        | "bz2" | "tbz" | "tbz2" | "xz" | "txz" | "lzma" | "lz" | "lz4"
+        | "zst" | "cab" | "z" | "arj" | "ace" | "lha" | "lzh" | "wim"
+        | "swm" | "esd" => "Archive",
+
+        // ── Disk / Virtual Machine Image ──────────────────────────────
+        | "iso" | "img" | "mdf" | "mds" | "nrg" | "cue" | "bin" | "ccd"
+        | "sub" | "toast" | "dmg" | "vhd" | "vhdx" | "vmdk" | "vdi"
+        | "qcow" | "qcow2" | "hdd" | "wbfs" | "gdi" | "cdi" | "chd"
+        | "xci" | "nsp" => "Disk Image",
+
+        // ── Application / Executable ──────────────────────────────────
+        | "exe" | "msi" | "msix" | "appx" | "dll" | "sys" | "drv" | "ocx"
+        | "com" | "scr" | "cpl" | "app" | "pkg" | "ipa" | "apk" | "aab"
+        | "xapk" | "deb" | "rpm" | "flatpak" | "snap" | "appimage"
+        | "jar" | "war" | "ear" => "Application",
+
+        // ── Source Code ───────────────────────────────────────────────
+        | "c" | "h" | "cpp" | "cxx" | "cc" | "hpp" | "hxx" | "cs" | "vb"
+        | "java" | "class" | "kt" | "kts" | "swift" | "m" | "mm" | "rs"
+        | "go" | "py" | "pyx" | "pxd" | "rb" | "rake" | "pl" | "pm"
+        | "lua" | "r" | "jl" | "f" | "f90" | "f95" | "f03" | "asm" | "s"
+        | "dart" | "scala" | "groovy" | "clj" | "cljs" | "ex" | "exs"
+        | "erl" | "hrl" | "hs" | "lhs" | "ml" | "mli" | "nim" | "v"
+        | "sv" | "vhdl" | "zig" => "Source Code",
+
+        // ── Script / Automation ───────────────────────────────────────
+        | "js" | "mjs" | "cjs" | "tsx" | "jsx" | "coffee" | "sh"
+        | "bash" | "zsh" | "fish" | "bat" | "cmd" | "ps1" | "psm1" | "psd1"
+        | "vbs" | "vbe" | "wsf" | "ahk" | "au3" | "tcl" | "awk" | "sed"
+        | "php" | "php3" | "php4" | "php5" | "phtml" => "Script",
+
+        // ── Web ───────────────────────────────────────────────────────
+        | "html" | "htm" | "xhtml" | "css" | "scss" | "sass" | "less"
+        | "json" | "json5" | "jsonc" | "xml" | "xsl" | "xslt" | "yaml"
+        | "yml" | "toml" | "ini" | "cfg" | "conf" | "env" | "graphql"
+        | "wasm" => "Web / Config",
+
+        // ── Document ──────────────────────────────────────────────────
+        | "pdf" | "doc" | "docx" | "docm" | "dot" | "dotx" | "odt" | "ott"
+        | "rtf" | "wps" | "wpd" | "pages" | "tex" | "bib" | "eps" | "ps"
+        | "epub" | "mobi" | "azw" | "azw3" | "fb2" | "lit" | "djvu"
+        | "xps" | "oxps" => "Document",
+
+        // ── Spreadsheet / Data ────────────────────────────────────────
+        | "xls" | "xlsx" | "xlsm" | "xlsb" | "xlt" | "xltx" | "ods" | "ots"
+        | "csv" | "tsv" | "numbers" | "ppt" | "pptx" | "pptm" | "pot"
+        | "potx" | "odp" | "otp" | "key" => "Presentation / Sheet",
+
+        // ── Text / Log ────────────────────────────────────────────────
+        | "txt" | "log" | "md" | "rst" | "nfo" | "diz" | "asc"
+        | "readme" | "changelog" | "license" => "Text / Log",
+
+        // ── Database ──────────────────────────────────────────────────
+        | "db" | "sqlite" | "sqlite3" | "db3" | "ldf" | "ndf"
+        | "frm" | "ibd" | "ibdata" | "myd" | "myi"
+        | "accdb" | "accde" | "mdb" | "dbf" | "fdb" | "gdb" | "nsf"
+        | "realm" => "Database",
+
+        // ── AI / ML Model Weights ─────────────────────────────────────
+        | "safetensors" | "ckpt" | "pt" | "pth" | "gguf" | "ggml" | "onnx"
+        | "h5" | "hdf5" | "pb" | "tflite" | "mlmodel" | "mlpackage"
+        | "pdparams" | "npy" | "npz" | "pkl" | "pickle" | "joblib" => "AI Model",
+
+        // ── 3D Model / CAD ────────────────────────────────────────────
+        | "obj" | "fbx" | "stl" | "blend" | "3ds" | "dae" | "gltf" | "glb"
+        | "ply" | "abc" | "usd" | "usda" | "usdc" | "usdz" | "step" | "stp"
+        | "iges" | "igs" | "sldprt" | "sldasm" | "f3d" | "skp" | "ifc"
+        | "dwg" | "dxf" | "3mf" | "x3d" | "wrl" | "vrml" => "3D / CAD",
+
+        // ── Game / ROM / Emulator ─────────────────────────────────────
+        | "nes" | "smc" | "sfc" | "gb" | "gbc" | "gba" | "n64" | "z64"
+        | "v64" | "nds" | "cia" | "gen" | "sms" | "gg"
+        | "psx" | "ps2" | "pbp" | "nca" | "wad"
+        | "gcm" | "ciso" | "rvz" | "bsp" | "pk3" | "pk4"
+        | "vpk" | "assets" | "unity" | "unitypackage" | "uasset" | "upk"
+        | "pck" | "big" | "forge" => "Game / ROM",
+
+        // ── Font ──────────────────────────────────────────────────────
+        | "ttf" | "otf" | "woff" | "woff2" | "eot" | "fnt" | "fon" | "pfm"
+        | "pfb" | "afm" | "dfont" | "suit" | "pcf" | "bdf" => "Font",
+
+        // ── Certificate / Security ────────────────────────────────────
+        | "pem" | "crt" | "cer" | "der" | "pfx" | "p12" | "p7b" | "p7c"
+        | "p8" | "csr" | "jks" | "keystore" | "pvk" | "spc" => "Certificate",
+
+        // ── Design / DAW / Project ────────────────────────────────────
+        | "psd" | "psb" | "xcf" | "kra" | "afdesign" | "afphoto" | "afpub"
+        | "ai" | "indd" | "idml" | "qxd" | "qxp" | "sketch" | "fig"
+        | "aep" | "aepx" | "prproj" | "ppj" | "drp" | "kdenlive"
+        | "flp" | "als" | "logic" | "band" | "ptx" | "pts" | "ptf"
+        | "reason" | "rns" | "nki" | "nkx" | "c4d" | "max" | "ma" | "mb"
+        | "hip" | "hiplc" | "zpr" => "Design / DAW",
+
+        // ── Backup / Temp ─────────────────────────────────────────────
+        | "bak" | "old" | "orig" | "tmp" | "temp" | "dmp" | "mdmp" | "swp"
+        | "swo" | "lock" | "pid" => "Backup / Temp",
+
         _ => "Other",
     }
     .to_string()
 }
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Browser Cleanup
@@ -311,7 +427,7 @@ pub fn get_privacy_items() -> Vec<PrivacyItem> {
             name: "Prefetch Data".into(),
             description: "Clear application prefetch traces".into(),
             category: "System".into(),
-            data_size_mb: dir_size_mb("C:\\Windows\\Prefetch"),
+            data_size_mb: dir_size_mb(&format!("{}\\Prefetch", std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()))),
         },
     ]
 }
@@ -351,7 +467,8 @@ pub fn clean_privacy_item(id: &str) -> Result<String, String> {
             Ok(format!("Cleared activity history ({} items)", count))
         }
         "prefetch" => {
-            let count = clean_dir_files("C:\\Windows\\Prefetch");
+            let prefetch = format!("{}\\Prefetch", std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()));
+            let count = clean_dir_files(&prefetch);
             Ok(format!("Cleared {} prefetch files", count))
         }
         _ => Err(format!("Unknown privacy item: {}", id)),
@@ -476,8 +593,10 @@ pub fn clean_windows_update() -> Result<String, String> {
     let mut freed = 0u64;
     let mut count = 0u32;
 
+    let sys_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
+
     // Software Distribution Download
-    let dl_path = "C:\\Windows\\SoftwareDistribution\\Download";
+    let dl_path = format!("{}\\SoftwareDistribution\\Download", sys_root);
     if let Ok(entries) = std::fs::read_dir(dl_path) {
         for entry in entries.flatten() {
             if let Ok(meta) = entry.metadata() {

@@ -1,9 +1,125 @@
 //! VegaOptimizer — Windows system optimization engine
-//! Uses winapi crate + std::process::Command for Windows system optimization.
+//! Uses winapi crate + direct ntdll FFI for Windows system optimization.
 
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use sysinfo::{ProcessesToUpdate, System};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// System path helpers — avoid hardcoding "C:\\" for non-standard Windows installs
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Returns the Windows system root (e.g. "C:\Windows"), never hardcoded.
+fn system_root() -> String {
+    std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into())
+}
+
+/// Returns the system drive root (e.g. "C:\\"), derived from %SystemDrive%.
+fn system_drive() -> String {
+    let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+    format!("{}\\" , drive)
+}
+
+/// Returns the ProgramData path (e.g. "C:\ProgramData").
+fn program_data() -> String {
+    std::env::var("ProgramData").unwrap_or_else(|_| format!("{}\\ProgramData", system_drive()))
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Native FFI — NtSetSystemInformation for memory list operations
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[cfg(windows)]
+mod nt {
+    /// SystemMemoryListInformation class ID for NtSetSystemInformation
+    pub const SYSTEM_MEMORY_LIST_INFORMATION: u32 = 80;
+
+    /// Memory list command codes (passed as the information buffer value)
+    #[repr(i32)]
+    #[allow(dead_code)]
+    pub enum MemoryListCommand {
+        MemoryFlushModifiedList = 2,
+        MemoryPurgeStandbyList = 4,
+        MemoryPurgeLowPriorityStandbyList = 5,
+    }
+
+    #[link(name = "ntdll")]
+    extern "system" {
+        /// Kernel call to manipulate system memory lists (standby, modified, combined).
+        /// Requires SeProfileSingleProcessPrivilege or SeIncreaseQuotaPrivilege.
+        pub fn NtSetSystemInformation(
+            system_information_class: u32,
+            system_information: *mut std::ffi::c_void,
+            system_information_length: u32,
+        ) -> i32; // NTSTATUS
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        /// Flushes the system file cache by resetting min/max to SIZE_MAX.
+        /// Requires SeIncreaseQuotaPrivilege.
+        pub fn SetSystemFileCacheSize(
+            minimum_file_cache_size: usize,
+            maximum_file_cache_size: usize,
+            flags: u32,
+        ) -> i32; // BOOL
+    }
+
+    /// Enable a named privilege on the current process token.
+    /// Returns true if the privilege was successfully enabled.
+    pub fn enable_privilege(privilege_name: &str) -> bool {
+        use winapi::um::handleapi::CloseHandle;
+        use winapi::um::processthreadsapi::{GetCurrentProcess, OpenProcessToken};
+        use winapi::um::securitybaseapi::AdjustTokenPrivileges;
+        use winapi::um::winbase::LookupPrivilegeValueA;
+        use winapi::um::winnt::{
+            SE_PRIVILEGE_ENABLED, TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_QUERY,
+        };
+        use std::ffi::CString;
+
+        unsafe {
+            let mut token = std::ptr::null_mut();
+            if OpenProcessToken(
+                GetCurrentProcess(),
+                TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+                &mut token,
+            ) == 0
+            {
+                return false;
+            }
+
+            let priv_name = match CString::new(privilege_name) {
+                Ok(s) => s,
+                Err(_) => { CloseHandle(token); return false; }
+            };
+
+            let mut tp: TOKEN_PRIVILEGES = std::mem::zeroed();
+            if LookupPrivilegeValueA(
+                std::ptr::null(),
+                priv_name.as_ptr(),
+                &mut tp.Privileges[0].Luid,
+            ) == 0
+            {
+                CloseHandle(token);
+                return false;
+            }
+
+            tp.PrivilegeCount = 1;
+            tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+
+            let result = AdjustTokenPrivileges(
+                token,
+                0,
+                &mut tp,
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            CloseHandle(token);
+            result != 0
+        }
+    }
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Types
@@ -129,7 +245,7 @@ pub fn get_processes() -> Vec<ProcessInfo> {
         .filter(|p| p.memory_mb > 0.1)
         .collect();
 
-    procs.sort_by(|a, b| b.memory_mb.partial_cmp(&a.memory_mb).unwrap());
+    procs.sort_by(|a, b| b.memory_mb.partial_cmp(&a.memory_mb).unwrap_or(std::cmp::Ordering::Equal));
     procs
 }
 
@@ -261,10 +377,11 @@ fn measure_cache_size() -> u64 {
 
 pub fn get_optimization_catalog() -> Vec<OptimizationItem> {
     // ── Measure real system values ──
-    let temp_dir = std::env::var("TEMP").unwrap_or_else(|_| "C:\\Windows\\Temp".into());
+    let temp_dir = std::env::var("TEMP").unwrap_or_else(|_| format!("{}\\Temp", system_root()));
     let local_app = std::env::var("LOCALAPPDATA").unwrap_or_default();
+    let win_temp = format!("{}\\Temp", system_root());
 
-    let temp_size = measure_dir_size(&temp_dir) + measure_dir_size("C:\\Windows\\Temp");
+    let temp_size = measure_dir_size(&temp_dir) + measure_dir_size(&win_temp);
     let trimmable = measure_trimmable_working_set();
     let selective = measure_selective_trim_savings();
     let standby = measure_standby_list();
@@ -277,8 +394,9 @@ pub fn get_optimization_catalog() -> Vec<OptimizationItem> {
     let shader_path = format!("{}\\D3DSCache", local_app);
     let shader_size = measure_dir_size(&shader_path);
 
-    let wer_size = measure_dir_size("C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportQueue")
-        + measure_dir_size("C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportArchive");
+    let pd = program_data();
+    let wer_size = measure_dir_size(&format!("{}\\Microsoft\\Windows\\WER\\ReportQueue", pd))
+        + measure_dir_size(&format!("{}\\Microsoft\\Windows\\WER\\ReportArchive", pd));
 
     let telemetry_mem = measure_service_memory(&["diagtrack", "utcsvc"]);
     let xbox_mem = measure_service_memory(&["xbl", "xbox", "gamebar"]);
@@ -540,24 +658,9 @@ fn execute_optimization(id: &str) -> OptimizationResult {
     match id {
         "mem_working_set" => optimize_working_set(),
         "mem_system_cache" => optimize_system_file_cache(),
-        "mem_standby_list" => simple_result(
-            "mem_standby_list",
-            "Standby List",
-            true,
-            "Purged standby list",
-        ),
-        "mem_modified_page" => simple_result(
-            "mem_modified_page",
-            "Modified Page List",
-            true,
-            "Flushed modified page list",
-        ),
-        "mem_combined_page" => simple_result(
-            "mem_combined_page",
-            "Combined Page List",
-            true,
-            "Flushed combined page list",
-        ),
+        "mem_standby_list" => purge_standby_list(),
+        "mem_modified_page" => flush_modified_page_list(),
+        "mem_combined_page" => flush_combined_page_list(),
         "mem_registry_cache" => optimize_registry_cache(),
         "proc_lower_idle" => optimize_lower_idle_priorities(),
         "proc_boost_foreground" => optimize_boost_foreground(),
@@ -674,12 +777,201 @@ fn optimize_working_set() -> OptimizationResult {
 }
 
 fn optimize_system_file_cache() -> OptimizationResult {
-    simple_result(
-        "mem_system_cache",
-        "System File Cache",
-        true,
-        "System file cache flushed",
-    )
+    #[cfg(windows)]
+    {
+        // SeIncreaseQuotaPrivilege is required for SetSystemFileCacheSize
+        nt::enable_privilege("SeIncreaseQuotaPrivilege");
+
+        let mut sys = System::new_all();
+        sys.refresh_all();
+        let before = sys.used_memory();
+
+        // Setting both min and max to SIZE_MAX with flags=0 instructs Windows
+        // to flush the file system cache immediately
+        let result = unsafe {
+            nt::SetSystemFileCacheSize(usize::MAX, usize::MAX, 0)
+        };
+
+        if result != 0 {
+            sys.refresh_all();
+            let after = sys.used_memory();
+            let freed = if before > after {
+                (before - after) as f64 / 1_048_576.0
+            } else {
+                0.0
+            };
+            return OptimizationResult {
+                id: "mem_system_cache".into(),
+                name: "System File Cache".into(),
+                success: true,
+                message: format!("System file cache flushed — freed {:.1} MB", freed),
+                duration_ms: 0,
+                memory_freed_mb: Some(freed),
+            };
+        } else {
+            return simple_result(
+                "mem_system_cache",
+                "System File Cache",
+                false,
+                "Failed to flush system file cache — requires Administrator privileges",
+            );
+        }
+    }
+
+    #[cfg(not(windows))]
+    simple_result("mem_system_cache", "System File Cache", false, "Windows only")
+}
+
+fn purge_standby_list() -> OptimizationResult {
+    #[cfg(windows)]
+    {
+        nt::enable_privilege("SeProfileSingleProcessPrivilege");
+        nt::enable_privilege("SeIncreaseQuotaPrivilege");
+
+        let mut sys = System::new_all();
+        sys.refresh_all();
+        let before = sys.used_memory();
+
+        // Command 4 = MemoryPurgeStandbyList
+        let mut command: i32 = nt::MemoryListCommand::MemoryPurgeStandbyList as i32;
+        let status = unsafe {
+            nt::NtSetSystemInformation(
+                nt::SYSTEM_MEMORY_LIST_INFORMATION,
+                &mut command as *mut i32 as *mut std::ffi::c_void,
+                std::mem::size_of::<i32>() as u32,
+            )
+        };
+
+        if status >= 0 {
+            // NTSTATUS >= 0 means success
+            sys.refresh_all();
+            let after = sys.used_memory();
+            let freed = if before > after {
+                (before - after) as f64 / 1_048_576.0
+            } else {
+                0.0
+            };
+            return OptimizationResult {
+                id: "mem_standby_list".into(),
+                name: "Standby List".into(),
+                success: true,
+                message: format!("Purged standby list — freed {:.1} MB", freed),
+                duration_ms: 0,
+                memory_freed_mb: Some(freed),
+            };
+        } else {
+            return simple_result(
+                "mem_standby_list",
+                "Standby List",
+                false,
+                &format!("Failed to purge standby list (NTSTATUS: 0x{:08X}) — requires Administrator", status as u32),
+            );
+        }
+    }
+
+    #[cfg(not(windows))]
+    simple_result("mem_standby_list", "Standby List", false, "Windows only")
+}
+
+fn flush_modified_page_list() -> OptimizationResult {
+    #[cfg(windows)]
+    {
+        nt::enable_privilege("SeProfileSingleProcessPrivilege");
+        nt::enable_privilege("SeIncreaseQuotaPrivilege");
+
+        let mut sys = System::new_all();
+        sys.refresh_all();
+        let before = sys.used_memory();
+
+        // Command 2 = MemoryFlushModifiedList
+        let mut command: i32 = nt::MemoryListCommand::MemoryFlushModifiedList as i32;
+        let status = unsafe {
+            nt::NtSetSystemInformation(
+                nt::SYSTEM_MEMORY_LIST_INFORMATION,
+                &mut command as *mut i32 as *mut std::ffi::c_void,
+                std::mem::size_of::<i32>() as u32,
+            )
+        };
+
+        if status >= 0 {
+            sys.refresh_all();
+            let after = sys.used_memory();
+            let freed = if before > after {
+                (before - after) as f64 / 1_048_576.0
+            } else {
+                0.0
+            };
+            return OptimizationResult {
+                id: "mem_modified_page".into(),
+                name: "Modified Page List".into(),
+                success: true,
+                message: format!("Flushed modified page list — freed {:.1} MB", freed),
+                duration_ms: 0,
+                memory_freed_mb: Some(freed),
+            };
+        } else {
+            return simple_result(
+                "mem_modified_page",
+                "Modified Page List",
+                false,
+                &format!("Failed to flush modified page list (NTSTATUS: 0x{:08X}) — requires Administrator", status as u32),
+            );
+        }
+    }
+
+    #[cfg(not(windows))]
+    simple_result("mem_modified_page", "Modified Page List", false, "Windows only")
+}
+
+fn flush_combined_page_list() -> OptimizationResult {
+    #[cfg(windows)]
+    {
+        nt::enable_privilege("SeProfileSingleProcessPrivilege");
+        nt::enable_privilege("SeIncreaseQuotaPrivilege");
+
+        // Combined page list purge uses command 5 (MemoryPurgeLowPriorityStandbyList)
+        // which covers the combined/low-priority standby pages on Win 8.1+
+        let mut sys = System::new_all();
+        sys.refresh_all();
+        let before = sys.used_memory();
+
+        let mut command: i32 = nt::MemoryListCommand::MemoryPurgeLowPriorityStandbyList as i32;
+        let status = unsafe {
+            nt::NtSetSystemInformation(
+                nt::SYSTEM_MEMORY_LIST_INFORMATION,
+                &mut command as *mut i32 as *mut std::ffi::c_void,
+                std::mem::size_of::<i32>() as u32,
+            )
+        };
+
+        if status >= 0 {
+            sys.refresh_all();
+            let after = sys.used_memory();
+            let freed = if before > after {
+                (before - after) as f64 / 1_048_576.0
+            } else {
+                0.0
+            };
+            return OptimizationResult {
+                id: "mem_combined_page".into(),
+                name: "Combined Page List".into(),
+                success: true,
+                message: format!("Flushed combined page list — freed {:.1} MB", freed),
+                duration_ms: 0,
+                memory_freed_mb: Some(freed),
+            };
+        } else {
+            return simple_result(
+                "mem_combined_page",
+                "Combined Page List",
+                false,
+                &format!("Failed to flush combined page list (NTSTATUS: 0x{:08X}) — requires Administrator", status as u32),
+            );
+        }
+    }
+
+    #[cfg(not(windows))]
+    simple_result("mem_combined_page", "Combined Page List", false, "Windows only")
 }
 
 fn optimize_registry_cache() -> OptimizationResult {
@@ -1006,9 +1298,10 @@ fn clean_directory(path: &str) -> (u64, u32) {
 }
 
 fn clean_temp_files() -> OptimizationResult {
-    let temp_dir = std::env::var("TEMP").unwrap_or_else(|_| "C:\\Windows\\Temp".to_string());
+    let temp_dir = std::env::var("TEMP").unwrap_or_else(|_| format!("{}\\Temp", system_root()));
+    let win_temp = format!("{}\\Temp", system_root());
     let (freed1, count1) = clean_directory(&temp_dir);
-    let (freed2, count2) = clean_directory("C:\\Windows\\Temp");
+    let (freed2, count2) = clean_directory(&win_temp);
     let total_freed = (freed1 + freed2) as f64 / 1_048_576.0;
 
     OptimizationResult {

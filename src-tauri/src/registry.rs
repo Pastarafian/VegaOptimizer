@@ -225,26 +225,89 @@ pub fn fix_registry_issue(
         _ => return Err("This issue type cannot be auto-fixed".into()),
     }
 
-    // For SharedDLLs, remove the value
+    // Convert backslash-based paths to PowerShell PSProvider paths
+    let ps_path = key_path
+        .replace("HKLM\\", "HKLM:\\")
+        .replace("HKCU\\", "HKCU:\\");
+
+    // SharedDLLs entries — remove the value (the value name IS the file path)
     if key_path.contains("SharedDLLs") {
-        match Command::new("powershell")
-            .args([
-                "-Command",
+        return run_ps_fix(
+            &format!(
+                "Remove-ItemProperty -Path '{}' -Name '{}' -ErrorAction Stop",
+                ps_path, value_name
+            ),
+            &format!("Removed SharedDLL entry: {}", value_name),
+        );
+    }
+
+    // MUI Cache entries — remove the value
+    if key_path.contains("MuiCache") {
+        return run_ps_fix(
+            &format!(
+                "Remove-ItemProperty -Path '{}' -Name '{}' -ErrorAction Stop",
+                ps_path, value_name
+            ),
+            &format!("Removed MUI cache entry: {}", value_name),
+        );
+    }
+
+    // Broken file associations — clear the default value pointing to a missing handler
+    if issue_type == "broken_shortcut" && key_path.contains("Classes") {
+        return run_ps_fix(
+            &format!(
+                "Set-ItemProperty -Path '{}' -Name '(default)' -Value '' -ErrorAction Stop",
+                ps_path
+            ),
+            &format!("Cleared broken association for {}", value_name),
+        );
+    }
+
+    // Orphaned software — remove the subkey (Uninstall entries or App Paths entries)
+    if issue_type == "orphaned_software" {
+        // For Uninstall entries, the PSPath includes the full subkey path
+        if key_path.contains("Uninstall") || key_path.contains("App Paths") {
+            return run_ps_fix(
                 &format!(
-                    "Remove-ItemProperty -Path '{}' -Name '{}' -ErrorAction Stop",
-                    key_path
-                        .replace("HKLM\\", "HKLM:\\")
-                        .replace("HKCU\\", "HKCU:\\"),
-                    value_name
+                    "Remove-Item -Path '{}' -Recurse -Force -ErrorAction Stop",
+                    ps_path
                 ),
-            ])
-            .output()
-        {
-            Ok(o) if o.status.success() => return Ok(format!("Fixed: removed {}", value_name)),
-            Ok(o) => return Err(String::from_utf8_lossy(&o.stderr).to_string()),
-            Err(e) => return Err(e.to_string()),
+                &format!("Removed orphaned entry: {}", value_name),
+            );
         }
     }
 
-    Ok(format!("Marked for cleanup: {} - {}", key_path, value_name))
+    // Invalid path (generic fallback) — remove the value from the key
+    if issue_type == "invalid_path" {
+        return run_ps_fix(
+            &format!(
+                "Remove-ItemProperty -Path '{}' -Name '{}' -ErrorAction Stop",
+                ps_path,
+                value_name.replace('\'', "''")
+            ),
+            &format!("Removed invalid path entry: {}", value_name),
+        );
+    }
+
+    Ok(format!("Marked for review: {} — {}", key_path, value_name))
+}
+
+/// Helper: execute a PowerShell fix command and return a result
+fn run_ps_fix(command: &str, success_msg: &str) -> Result<String, String> {
+    match Command::new("powershell")
+        .args(["-Command", command])
+        .output()
+    {
+        Ok(o) if o.status.success() => Ok(success_msg.to_string()),
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr).to_string();
+            // PowerShell may emit non-fatal warnings; if stderr is empty, treat as success
+            if stderr.trim().is_empty() {
+                Ok(success_msg.to_string())
+            } else {
+                Err(stderr)
+            }
+        }
+        Err(e) => Err(e.to_string()),
+    }
 }
