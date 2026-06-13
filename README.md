@@ -147,10 +147,6 @@ Many features require **Administrator privileges** for full functionality:
 
 The included `launch.bat` automatically requests elevation. Without admin rights, the app still works but some operations may fail silently or prompt.
 
----
-
-## Screenshots
-
 > _Run `npx tauri dev` and explore the 16-page toolkit yourself!_
 
 ---
